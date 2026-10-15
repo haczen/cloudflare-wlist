@@ -1,0 +1,25 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "wlist",
+	"main": "./workers/app.ts",
+	"compatibility_date": "2025-04-04",
+	"vars": {
+		"ADMIN_USERNAME": "admin",
+		"ADMIN_PASSWORD": "changeme",
+		"SITE_TITLE": "WList",
+		"SITE_ANNOUNCEMENT": "Welcome to WList storage service!",
+		"CHUNK_SIZE_MB": "10",
+		"WEBDAV_ENABLED": "false",
+		"WEBDAV_USERNAME": "webdav",
+		"WEBDAV_PASSWORD": "changeme",
+		"GITHUB_CLIENT_ID": "",
+		"GITHUB_CLIENT_SECRET": ""
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "wlist",
+			"database_id": "00000000-0000-0000-0000-000000000000"
+		}
+	]
+}

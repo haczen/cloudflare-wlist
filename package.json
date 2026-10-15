@@ -1,0 +1,42 @@
+{
+	"name": "wlist",
+	"private": true,
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"build": "react-router build",
+		"cf-typegen": "node -e \"const fs=require('fs');const path=require('path');const dir=path.join('.wrangler','tmp');fs.mkdirSync(dir,{recursive:true});const cfg=path.join(dir,'wrangler.jsonc');fs.writeFileSync(cfg,fs.readFileSync('wrangler.jsonc.example','utf8'));\" && wrangler types --config .wrangler/tmp/wrangler.jsonc",
+		"deploy": "npm run build && wrangler deploy",
+		"dev": "react-router dev",
+		"postinstall": "npm run cf-typegen",
+		"preview": "npm run build && vite preview",
+		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
+	},
+	"dependencies": {
+		"@types/qrcode": "^1.5.6",
+		"highlight.js": "^11.11.1",
+		"isbot": "^5.1.31",
+		"jszip": "^3.10.1",
+		"mammoth": "^1.12.0",
+		"marked": "^17.0.1",
+		"pako": "^2.1.0",
+		"qrcode": "^1.5.4",
+		"react": "^19.1.1",
+		"react-dom": "^19.1.1",
+		"react-router": "^7.10.0",
+		"xlsx": "^0.18.5"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.40.2",
+		"@react-router/dev": "^7.10.0",
+		"@tailwindcss/vite": "^4.1.17",
+		"@types/node": "^22",
+		"@types/react": "^19.1.13",
+		"@types/react-dom": "^19.1.9",
+		"tailwindcss": "^4.1.17",
+		"typescript": "^5.9.2",
+		"vite": "^7.1.7",
+		"vite-tsconfig-paths": "^5.1.4",
+		"wrangler": "^4.55.0"
+	}
+}
