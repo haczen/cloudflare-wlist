@@ -7,6 +7,10 @@ export interface S3Config {
 	secretAccessKey: string;
 	bucket: string;
 	basePath?: string;
+	// 为 true 时使用 path-style（桶名放在 URL 路径里），适用于未配置泛域名解析的
+	// MinIO 等私有存储。默认 false = 虚拟托管（桶名作为子域名），AWS S3 /
+	// Cloudflare R2 / 阿里云 OSS 均要求此方式。
+	forcePathStyle?: boolean;
 }
 
 export interface S3Object {
@@ -100,15 +104,70 @@ async function getSignatureKey(
 
 export class S3Client {
 	private config: S3Config;
+	private readonly forcePathStyle: boolean;
 
 	constructor(config: S3Config) {
 		this.config = config;
+		this.forcePathStyle = config.forcePathStyle === true;
 	}
 
 	private getFullPath(path: string): string {
 		const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
 		const cleanPath = path.replace(/^\//, "");
 		return basePath ? `${basePath}/${cleanPath}` : cleanPath;
+	}
+
+	// 同时用于 SigV4 签名与实际请求的 Host 头。
+	// 虚拟托管（默认）：<bucket>.<endpoint-host>。
+	// path-style：endpoint 原始 host。
+	private getHost(): string {
+		const url = new URL(this.config.endpoint);
+		if (this.forcePathStyle) {
+			return url.host;
+		}
+		const host = url.host;
+		// 若 endpoint 已把桶名作为子域名（用户预先填了
+		// https://<bucket>.oss-cn-heyuan.aliyuncs.com），不再重复拼接。
+		if (host.startsWith(`${this.config.bucket}.`)) {
+			return host;
+		}
+		return `${this.config.bucket}.${host}`;
+	}
+
+	// 基础 URL（协议 + host [+ endpoint 路径]），不含对象路径。
+	private getBaseUrl(): string {
+		if (this.forcePathStyle) {
+			// path-style 保持原 endpoint 不变（沿用既有行为）。
+			return this.config.endpoint;
+		}
+		const url = new URL(this.config.endpoint);
+		const pathname = url.pathname.replace(/\/+$/, "");
+		return `${url.protocol}//${this.getHost()}${pathname}`;
+	}
+
+	// 对象操作的规范路径，传入桶内 key（已含 basePath）。
+	// path-style：/<bucket>/<keyPath>；虚拟托管：/<keyPath>。
+	private getObjectPath(keyPath: string): string {
+		const normalized = keyPath.startsWith("/") ? keyPath : `/${keyPath}`;
+		if (this.forcePathStyle) {
+			return `/${this.config.bucket}${normalized}`;
+		}
+		return normalized;
+	}
+
+	// 桶级操作（如 ListObjects）的规范路径。
+	private getBucketPath(): string {
+		return this.forcePathStyle ? `/${this.config.bucket}` : "/";
+	}
+
+	// 由规范路径 + 可选 query 拼出完整请求 URL。
+	private buildRequestUrl(path: string, queryString?: string): string {
+		const encodedPath = encodeS3Path(path);
+		let url = `${this.getBaseUrl()}${encodedPath}`;
+		if (queryString) {
+			url += `?${queryString}`;
+		}
+		return url;
 	}
 
 	private async signRequest(
@@ -119,8 +178,7 @@ export class S3Client {
 		payload: string = "",
 		useUnsignedPayload: boolean = false
 	): Promise<Record<string, string>> {
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
 		const dateStamp = amzDate.slice(0, 8);
@@ -197,7 +255,7 @@ export class S3Client {
 		}
 
 		const fullPrefix = this.getFullPath(normalizedPrefix);
-		const path = `/${this.config.bucket}`;
+		const path = this.getBucketPath();
 
 		const queryParams: Record<string, string> = {
 			"list-type": "2",
@@ -214,7 +272,7 @@ export class S3Client {
 		const queryString = buildCanonicalQueryString(queryParams);
 
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${path}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "GET",
 				headers,
@@ -341,11 +399,10 @@ export class S3Client {
 
 	async getObject(key: string): Promise<Response> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("GET", path);
-		const encodedPath = encodeS3Path(path);
 
-		const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
+		const response = await fetch(this.buildRequestUrl(path), {
 			method: "GET",
 			headers,
 		});
@@ -359,10 +416,9 @@ export class S3Client {
 
 	async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const encodedPath = encodeS3Path(path);
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -403,7 +459,7 @@ export class S3Client {
 		);
 		const signature = toHex(await hmacSha256(signingKey, stringToSign));
 
-		return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
 	async getSignedUploadPartUrl(
@@ -413,10 +469,9 @@ export class S3Client {
 		expiresIn: number = 3600
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const encodedPath = encodeS3Path(path);
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -459,7 +514,7 @@ export class S3Client {
 		);
 		const signature = toHex(await hmacSha256(signingKey, stringToSign));
 
-		return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
 	async putObject(
@@ -468,8 +523,7 @@ export class S3Client {
 		contentType?: string
 	): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 
 		let bodyData: ArrayBuffer;
 		if (typeof body === "string") {
@@ -481,7 +535,7 @@ export class S3Client {
 		// 二进制上传使用 UNSIGNED-PAYLOAD
 		const headers = await this.signRequest("PUT", path, {}, {}, "", true);
 
-		const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
+		const response = await fetch(this.buildRequestUrl(path), {
 			method: "PUT",
 			headers: {
 				...headers,
@@ -498,17 +552,13 @@ export class S3Client {
 
 	async deleteObject(key: string): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("DELETE", path);
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
-			{
-				method: "DELETE",
-				headers,
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
+			method: "DELETE",
+			headers,
+		});
 
 		if (!response.ok && response.status !== 204) {
 			const text = await response.text();
@@ -519,10 +569,9 @@ export class S3Client {
 	async copyObject(sourceKey: string, destKey: string): Promise<void> {
 		const fullSourceKey = this.getFullPath(sourceKey);
 		const fullDestKey = this.getFullPath(destKey);
-		const path = `/${this.config.bucket}/${fullDestKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullDestKey);
 
-		// x-amz-copy-source 必须 URL 编码
+		// x-amz-copy-source 与请求的寻址方式无关：它始终带桶名，用于标识源对象。
 		const copySource = `/${this.config.bucket}/${fullSourceKey}`
 			.split("/")
 			.map((segment) => encodeAwsUriComponent(segment))
@@ -539,7 +588,7 @@ export class S3Client {
 
 		// 大对象服务端复制可能较慢，放宽到 120s
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
+			this.buildRequestUrl(path),
 			{
 				method: "PUT",
 				headers: {
@@ -572,17 +621,13 @@ export class S3Client {
 		lastModified: string;
 	} | null> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("HEAD", path);
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
-			{
-				method: "HEAD",
-				headers,
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
+			method: "HEAD",
+			headers,
+		});
 
 		if (response.status === 404) {
 			return null;
@@ -610,8 +655,7 @@ export class S3Client {
 		_options?: { size?: number; chunkSize?: number }
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams = { uploads: "" };
 
 		const headers = await this.signRequest("POST", path, queryParams, {
@@ -619,7 +663,7 @@ export class S3Client {
 		});
 
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?uploads`,
+			this.buildRequestUrl(path, "uploads"),
 			{
 				method: "POST",
 				headers: {
@@ -653,8 +697,7 @@ export class S3Client {
 		contentLength?: number
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 
 		// 查询参数必须按字母序参与签名
 		const queryParams: Record<string, string> = {
@@ -678,7 +721,7 @@ export class S3Client {
 		}
 
 		const response = await fetch(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "PUT",
 				headers: fetchHeaders,
@@ -707,8 +750,7 @@ export class S3Client {
 		parts: { partNumber: number; etag: string }[]
 	): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams: Record<string, string> = { uploadId };
 
 		const partsXml = parts
@@ -733,7 +775,7 @@ export class S3Client {
 
 		// 分片很多时合并耗时较长，放宽到 120s
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "POST",
 				headers: {
@@ -758,15 +800,14 @@ export class S3Client {
 		uploadId: string
 	): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams: Record<string, string> = { uploadId };
 
 		const headers = await this.signRequest("DELETE", path, queryParams);
 		const queryString = buildCanonicalQueryString(queryParams);
 
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "DELETE",
 				headers,
