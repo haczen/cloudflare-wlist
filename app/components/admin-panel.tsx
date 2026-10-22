@@ -114,6 +114,7 @@ export function StorageFormDialog({
 		configJson: initial?.config
 			? JSON.stringify(initial.config, null, 2)
 			: "",
+		forcePathStyle: initial?.config?.forcePathStyle === true,
 		isPublic: initial?.isPublic ?? false,
 		guestList: initial?.guestList ?? true,
 		guestDownload: initial?.guestDownload ?? true,
@@ -162,7 +163,7 @@ export function StorageFormDialog({
 						: "",
 				bucket: isS3 ? form.bucket : "",
 				basePath: form.basePath,
-				config: config || {},
+				config: config || (isS3 ? { forcePathStyle: form.forcePathStyle } : {}),
 				isPublic: form.isPublic,
 				guestList: form.guestList,
 				guestDownload: form.guestDownload,
@@ -335,6 +336,17 @@ export function StorageFormDialog({
 										/>
 									</div>
 								</div>
+							)}
+							{isS3 && (
+								<label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+									<input
+										type="checkbox"
+										checked={form.forcePathStyle}
+										onChange={(event) => set("forcePathStyle", event.target.checked)}
+										className="h-4 w-4"
+									/>
+									强制 Path-Style 访问（MinIO 等无泛域名解析的私有存储开启；阿里云 OSS / AWS S3 / R2 保持关闭）
+								</label>
 							)}
 							{isWebdav && (
 								<div>

@@ -78,6 +78,7 @@ export function createClient(storage: ClientStorageConfig): StorageClient {
 		secretAccessKey: storage.secretAccessKey,
 		bucket: storage.bucket,
 		basePath: storage.basePath,
+		forcePathStyle: storage.config?.forcePathStyle === true,
 	});
 }
 
