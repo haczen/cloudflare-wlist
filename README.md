@@ -63,6 +63,22 @@ npm run deploy
 2. Client ID / Secret 填入 `wrangler.jsonc` 的 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`
 3. 重新 `npm run deploy`
 
+### S3 兼容存储配置
+
+后台「添加存储」选 **S3 兼容存储**：
+
+| 字段 | 说明 |
+|---|---|
+| Endpoint | 不带桶名的服务端点，如 `https://oss-cn-heyuan.aliyuncs.com`、`https://s3.us-east-1.amazonaws.com`、`https://<accountid>.r2.cloudflarestorage.com` |
+| Region | 区域 ID。**阿里云 OSS 必须填地域 ID**（如 `cn-heyuan`），填 `oss-cn-heyuan` 或保持默认会报 `SignatureDoesNotMatch` |
+| Bucket / Access Key ID / Secret | 对应桶名与 AK/SK |
+
+默认使用 **虚拟托管（Virtual-Hosted）** 访问——桶名作为子域名。AWS S3 / R2 / B2 / 阿里云 OSS / 腾讯 COS 均要求此方式；阿里云 OSS 不支持 path-style，强行使用会返回 `403 SecondLevelDomainForbidden`。
+
+仅在 **MinIO 等未配置泛域名解析的私有存储** 场景下，勾选表单里的 **强制 Path-Style 访问**（等价于在扩展配置 JSON 里写 `{"forcePathStyle": true}`），桶名会改放入 URL 路径。
+
+> Endpoint 无需也不应自带桶名子域名；如已写成 `https://<bucket>.oss-...`，虚拟托管会自动识别并避免重复拼接，但仍建议填裸端点。
+
 ## 使用模型
 
 | 角色 | 看到什么 |
