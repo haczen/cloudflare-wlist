@@ -73,6 +73,14 @@ html.dark {
 }
 
 @layer components {
+	/* 图标按钮：方形 hover 底色，内部 svg 默认 16px */
+	.icon-btn {
+		@apply inline-flex items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:text-zinc-400 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-100;
+	}
+	.icon-btn > svg {
+		@apply h-[18px] w-[18px];
+	}
+
 	.btn-primary {
 		@apply btn bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800;
 	}

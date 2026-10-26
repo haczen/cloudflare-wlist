@@ -381,6 +381,27 @@ export const CheckIcon = ({ className }: IconProps) => (
 	</svg>
 );
 
+export const PlayIcon = ({ className }: IconProps) => (
+	<svg {...svgProps(className)}>
+		<polygon points="6 3 20 12 6 21 6 3" />
+	</svg>
+);
+
+export const PauseIcon = ({ className }: IconProps) => (
+	<svg {...svgProps(className)}>
+		<rect x="14" y="4" width="4" height="16" rx="1" />
+		<rect x="6" y="4" width="4" height="16" rx="1" />
+	</svg>
+);
+
+export const AlertCircleIcon = ({ className }: IconProps) => (
+	<svg {...svgProps(className)}>
+		<circle cx="12" cy="12" r="10" />
+		<line x1="12" x2="12" y1="8" y2="12" />
+		<line x1="12" x2="12.01" y1="16" y2="16" />
+	</svg>
+);
+
 export const SpinnerIcon = ({ className }: IconProps) => (
 	<svg
 		className={className ?? "h-4 w-4 animate-spin"}

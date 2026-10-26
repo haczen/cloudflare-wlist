@@ -10,6 +10,13 @@ import {
 	resolveFolderAccess,
 	type Folder,
 } from "~/lib/folders";
+import {
+	uploadManager,
+	filesFromDataTransfer,
+	migrateLegacyUploads,
+	type EnqueueEntry,
+} from "~/lib/upload-manager";
+import { UploadTaskPanel } from "~/components/UploadTaskPanel";
 
 // ---------- 带权限的目录树节点 ----------
 
@@ -221,11 +228,6 @@ function formatBytes(bytes: number): string {
 	return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function formatSpeed(bytesPerSecond: number): string {
-	if (!bytesPerSecond || bytesPerSecond <= 0) return "-";
-	return `${formatBytes(bytesPerSecond)}/s`;
-}
-
 function formatDate(dateStr: string): string {
 	if (!dateStr) return "-";
 	const date = new Date(dateStr);
@@ -431,19 +433,6 @@ function MoveDialog({
 
 // ---------- 文件浏览器 ----------
 
-interface UploadProgressState {
-	name: string;
-	progress: number;
-	currentPart?: number;
-	totalParts?: number;
-	speed?: number;
-	loaded?: number;
-	total?: number;
-	/** 队列剩余（含当前） */
-	queueIndex?: number;
-	queueTotal?: number;
-}
-
 function FileBrowser({
 	storage,
 	isAdmin,
@@ -505,8 +494,6 @@ function FileBrowser({
 	const [readme, setReadme] = useState<string | null>(null);
 
 	// 上传
-	const [uploadProgress, setUploadProgress] =
-		useState<UploadProgressState | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	// 弹窗
@@ -692,380 +679,24 @@ function FileBrowser({
 	);
 
 	// ---------- 上传 ----------
-
-	/** 单文件直传（PUT 走 Workers 代理，带进度） */
-	const uploadSingle = (file: File, uploadPath: string) => {
-		return new Promise<void>((resolve, reject) => {
-			const xhr = new XMLHttpRequest();
-			xhr.upload.onprogress = (event) => {
-				if (event.lengthComputable) {
-					setUploadProgress((prev) => ({
-						name: file.name,
-						progress: Math.round((event.loaded / event.total) * 100),
-						loaded: event.loaded,
-						total: event.total,
-						...prev,
-					}));
-				}
-			};
-			xhr.onload = () => {
-				if (xhr.status >= 200 && xhr.status < 300) {
-					resolve();
-				} else {
-					try {
-						const data = JSON.parse(xhr.responseText);
-						reject(new Error(data.error || "上传失败"));
-					} catch {
-						reject(new Error("上传失败"));
-					}
-				}
-			};
-			xhr.onerror = () => reject(new Error("网络错误"));
-			xhr.open("PUT", apiFileUrl(storage.id, uploadPath));
-			xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-			xhr.send(file);
+	// 统一走 uploadManager：多任务并发 + 断点续传 + 刷新恢复（lib/upload-manager.ts）
+	const enqueueUploads = (entries: EnqueueEntry[]) => {
+		if (entries.length === 0 || !canUpload) return;
+		// R2/S3 分块最小 5MB，最大 5GB，夹紧到安全区间
+		const chunkSize = Math.min(Math.max(chunkSizeMB, 5), 5120) * 1024 * 1024;
+		uploadManager.enqueue(entries, {
+			storageId: storage.id,
+			path,
+			chunkSize,
+			multipartSupported: supportsMultipart(storage.type),
 		});
 	};
 
-	/** 分块上传：优先直传预签名 URL，失败回退 Workers 代理；localStorage 记录进度支持续传 */
-	const uploadMultipart = async (
-		file: File,
-		uploadPath: string,
-		chunkSize: number
-	) => {
-		const totalParts = Math.ceil(file.size / chunkSize);
-		const contentType = file.type || "application/octet-stream";
-		const storageKey = `wlist_multipart_${storage.id}_${uploadPath}_${file.size}`;
-		const savedState = localStorage.getItem(storageKey);
-
-		let uploadId: string | undefined;
-		let completedParts: { partNumber: number; etag: string }[] = [];
-		let startPart = 0;
-		let useDirectUpload = true;
-
-		// 断点续传
-		if (savedState) {
-			try {
-				const parsed = JSON.parse(savedState) as {
-					uploadId?: string;
-					parts?: { partNumber: number; etag: string }[];
-					fileName?: string;
-					useDirectUpload?: boolean;
-				};
-				if (parsed.uploadId && parsed.parts && parsed.fileName === file.name) {
-					const shouldResume = window.confirm(
-						`检测到未完成的上传「${file.name}」，是否继续？\n已完成 ${parsed.parts.length}/${totalParts} 分块`
-					);
-					if (shouldResume) {
-						uploadId = parsed.uploadId;
-						completedParts = parsed.parts;
-						startPart = completedParts.length;
-						useDirectUpload = parsed.useDirectUpload ?? true;
-					} else {
-						try {
-							await fetch(
-								apiFileUrl(storage.id, uploadPath, {
-									action: "multipart-abort",
-								}),
-								{
-									method: "POST",
-									headers: { "Content-Type": "application/json" },
-									body: JSON.stringify({ uploadId: parsed.uploadId }),
-								}
-							);
-						} catch {
-							// 中止失败忽略
-						}
-						localStorage.removeItem(storageKey);
-					}
-				}
-			} catch {
-				// 无效状态忽略
-			}
-		}
-
-		// 初始化新的分块上传
-		if (!uploadId) {
-			setUploadProgress({
-				name: file.name,
-				progress: 0,
-				currentPart: 0,
-				totalParts,
-				loaded: 0,
-				total: file.size,
-			});
-			const initRes = await fetch(
-				apiFileUrl(storage.id, uploadPath, { action: "multipart-init" }),
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ contentType, size: file.size, chunkSize }),
-				}
-			);
-			if (!initRes.ok) {
-				const data = (await initRes.json()) as { error?: string };
-				throw new Error(data.error || "初始化分块上传失败");
-			}
-			const initData = (await initRes.json()) as { uploadId: string };
-			uploadId = initData.uploadId;
-			localStorage.setItem(
-				storageKey,
-				JSON.stringify({
-					uploadId,
-					fileName: file.name,
-					parts: [],
-					useDirectUpload: true,
-				})
-			);
-		}
-
-		// 进度统计
-		let totalBytesUploaded = startPart * chunkSize;
-		const startTime = Date.now();
-		const partProgress: Record<number, number> = {};
-		const currentUploadId = uploadId;
-		// 直传预签名 URL（惰性获取；客户端不支持时为空，走代理）
-		let signedUrls: Record<number, string> = {};
-
-		const persistState = () => {
-			localStorage.setItem(
-				storageKey,
-				JSON.stringify({
-					uploadId: currentUploadId,
-					fileName: file.name,
-					parts: completedParts,
-					useDirectUpload,
-				})
-			);
-		};
-
-		const updateProgress = () => {
-			const currentBytes =
-				totalBytesUploaded +
-				Object.values(partProgress).reduce((sum, v) => sum + v, 0);
-			const elapsed = (Date.now() - startTime) / 1000;
-			setUploadProgress({
-				name: file.name,
-				progress: Math.min(Math.round((currentBytes / file.size) * 100), 100),
-				currentPart: completedParts.length,
-				totalParts,
-				speed: elapsed > 0 ? currentBytes / elapsed : 0,
-				loaded: currentBytes,
-				total: file.size,
-			});
-		};
-
-		const uploadPartDirect = (
-			chunk: Blob,
-			url: string,
-			partNumber: number
-		): Promise<{ partNumber: number; etag: string }> =>
-			new Promise((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						partProgress[partNumber] = event.loaded;
-						updateProgress();
-					}
-				};
-				xhr.onload = () => {
-					delete partProgress[partNumber];
-					if (xhr.status >= 200 && xhr.status < 300) {
-						const etag = xhr.getResponseHeader("ETag")?.replace(/"/g, "") || "";
-						totalBytesUploaded += chunk.size;
-						resolve({ partNumber, etag });
-					} else {
-						reject(new Error(`直传失败: ${xhr.status}`));
-					}
-				};
-				xhr.onerror = () => {
-					delete partProgress[partNumber];
-					reject(new Error("直传网络错误"));
-				};
-				xhr.open("PUT", url);
-				xhr.send(chunk);
-			});
-
-		const uploadPartProxy = (
-			chunk: Blob,
-			partNumber: number
-		): Promise<{ partNumber: number; etag: string }> =>
-			new Promise((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						partProgress[partNumber] = event.loaded;
-						updateProgress();
-					}
-				};
-				xhr.onload = () => {
-					delete partProgress[partNumber];
-					if (xhr.status >= 200 && xhr.status < 300) {
-						try {
-							const data = JSON.parse(xhr.responseText);
-							totalBytesUploaded += chunk.size;
-							resolve({ partNumber, etag: data.etag || "" });
-						} catch {
-							reject(new Error("上传分块响应异常"));
-						}
-					} else {
-						try {
-							const data = JSON.parse(xhr.responseText);
-							reject(new Error(data.error || "上传分块失败"));
-						} catch {
-							reject(new Error("上传分块失败"));
-						}
-					}
-				};
-				xhr.onerror = () => {
-					delete partProgress[partNumber];
-					reject(new Error("网络错误"));
-				};
-				xhr.open(
-					"PUT",
-					apiFileUrl(storage.id, uploadPath, {
-						action: "multipart-upload",
-						uploadId: currentUploadId,
-						partNumber: String(partNumber),
-					})
-				);
-				xhr.send(chunk);
-			});
-
-		const uploadPart = async (item: {
-			partNumber: number;
-			start: number;
-			end: number;
-		}) => {
-			const chunk = file.slice(item.start, item.end);
-			if (useDirectUpload && signedUrls[item.partNumber]) {
-				try {
-					return await uploadPartDirect(chunk, signedUrls[item.partNumber], item.partNumber);
-				} catch {
-					// CORS / 网络问题 → 切换代理模式并记入断点状态
-					useDirectUpload = false;
-					persistState();
-				}
-			}
-			return uploadPartProxy(chunk, item.partNumber);
-		};
-
-		try {
-			const remainingParts = Array.from(
-				{ length: totalParts - startPart },
-				(_, i) => startPart + i + 1
-			);
-
-			// 批量获取直传 URL（客户端不支持签名时返回空，自动走代理）
-			if (useDirectUpload && remainingParts.length > 0) {
-				try {
-					const urlsRes = await fetch(
-						apiFileUrl(storage.id, uploadPath, { action: "multipart-urls" }),
-						{
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({
-								uploadId: currentUploadId,
-								partNumbers: remainingParts,
-							}),
-						}
-					);
-					if (urlsRes.ok) {
-						const data = (await urlsRes.json()) as {
-							urls: Record<number, string>;
-						};
-						signedUrls = data.urls || {};
-					}
-				} catch {
-					// 回退代理
-				}
-			}
-
-			const queue = remainingParts.map((partNumber) => ({
-				partNumber,
-				start: (partNumber - 1) * chunkSize,
-				end: Math.min(partNumber * chunkSize, file.size),
-			}));
-
-			// 并发池：同时最多 4 个分块
-			const CONCURRENT = 4;
-			let nextIndex = 0;
-			const worker = async () => {
-				while (nextIndex < queue.length) {
-					const item = queue[nextIndex++];
-					const result = await uploadPart(item);
-					completedParts.push(result);
-					persistState();
-					updateProgress();
-				}
-			};
-			await Promise.all(
-				Array.from({ length: Math.min(CONCURRENT, queue.length) }, worker)
-			);
-
-			// 完成合并（S3 要求按分块号升序）
-			completedParts.sort((a, b) => a.partNumber - b.partNumber);
-			const completeRes = await fetch(
-				apiFileUrl(storage.id, uploadPath, { action: "multipart-complete" }),
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						uploadId: currentUploadId,
-						parts: completedParts,
-					}),
-				}
-			);
-			if (!completeRes.ok) {
-				const data = (await completeRes.json()) as { error?: string };
-				throw new Error(data.error || "完成上传失败");
-			}
-			localStorage.removeItem(storageKey);
-		} catch (err) {
-			persistState();
-			throw err;
-		}
-	};
-
-	const uploadFiles = async (fileList: File[]) => {
-		if (fileList.length === 0 || !canUpload) return;
-		// R2/S3 分块最小 5MB，最大 5GB，夹紧到安全区间
-		const chunkSize =
-			Math.min(Math.max(chunkSizeMB, 5), 5120) * 1024 * 1024;
-		for (let i = 0; i < fileList.length; i++) {
-			const file = fileList[i];
-			const uploadPath = path ? `${path}/${file.name}` : file.name;
-			setUploadProgress({
-				name: file.name,
-				progress: 0,
-				queueIndex: i + 1,
-				queueTotal: fileList.length,
-			});
-			try {
-				if (file.size >= chunkSize && supportsMultipart(storage.type)) {
-					await uploadMultipart(file, uploadPath, chunkSize);
-				} else {
-					await uploadSingle(file, uploadPath);
-				}
-			} catch (err) {
-				window.alert(
-					`上传 ${file.name} 失败: ${err instanceof Error ? err.message : "未知错误"}`
-				);
-			}
-		}
-		setUploadProgress(null);
-		loadFiles();
-	};
-
-	const handleUploadInput = async (
-		event: React.ChangeEvent<HTMLInputElement>
-	) => {
+	const handleUploadInput = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const files = event.target.files;
 		if (!files || files.length === 0) return;
-		await uploadFiles(Array.from(files));
-		if (fileInputRef.current) {
-			fileInputRef.current.value = "";
-		}
+		enqueueUploads(Array.from(files, (file) => ({ file })));
+		event.target.value = "";
 	};
 
 	// Ctrl+V 粘贴文件直接上传到当前目录
@@ -1075,23 +706,41 @@ function FileBrowser({
 			const files = event.clipboardData?.files;
 			if (files && files.length > 0) {
 				event.preventDefault();
-				uploadFiles(Array.from(files));
+				enqueueUploads(Array.from(files, (file) => ({ file })));
 			}
 		};
 		document.addEventListener("paste", onPaste);
 		return () => document.removeEventListener("paste", onPaste);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [canUpload, path, storage.id, chunkSizeMB]);
+	}, [canUpload, path, storage.id, storage.type, chunkSizeMB]);
 
-	// 拖拽上传
-	const handleDrop = async (event: React.DragEvent) => {
+	// 上传完成后刷新当前存储的文件列表（防抖合并连续完成；不打断在跑的其他任务）
+	const loadFilesRef = useRef(loadFiles);
+	useEffect(() => {
+		loadFilesRef.current = loadFiles;
+	});
+	useEffect(() => {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const unsub = uploadManager.onFinish((task) => {
+			if (task.storageId !== storage.id) return;
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = null;
+				loadFilesRef.current();
+			}, 400);
+		});
+		return () => {
+			unsub();
+			if (timer) clearTimeout(timer);
+		};
+	}, [storage.id]);
+
+	// 拖拽上传（保留文件句柄，刷新后可一键恢复续传）
+	const handleDrop = (event: React.DragEvent) => {
 		event.preventDefault();
 		setDragOver(false);
 		if (!canUpload) return;
-		const files = Array.from(event.dataTransfer.files);
-		if (files.length > 0) {
-			await uploadFiles(files);
-		}
+		void filesFromDataTransfer(event.dataTransfer).then(enqueueUploads);
 	};
 
 	// ---------- 文件操作 ----------
@@ -1597,35 +1246,6 @@ function FileBrowser({
 					>
 						取消选择
 					</button>
-				</div>
-			)}
-
-			{/* 上传进度条 */}
-			{uploadProgress && (
-				<div className="border-b border-zinc-200 bg-white px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
-					<div className="mb-1 flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-400">
-						<span className="truncate">
-							{uploadProgress.queueTotal &&
-								`[${uploadProgress.queueIndex}/${uploadProgress.queueTotal}] `}
-							正在上传 {uploadProgress.name}
-							{uploadProgress.totalParts
-								? `（分块 ${uploadProgress.currentPart}/${uploadProgress.totalParts}）`
-								: ""}
-						</span>
-						<span className="shrink-0">
-							{uploadProgress.progress}%
-							{uploadProgress.speed ? ` · ${formatSpeed(uploadProgress.speed)}` : ""}
-							{uploadProgress.loaded !== undefined && uploadProgress.total
-								? ` · ${formatBytes(uploadProgress.loaded)}/${formatBytes(uploadProgress.total)}`
-								: ""}
-						</span>
-					</div>
-					<div className="h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-						<div
-							className="h-full rounded-full bg-blue-600 transition-all"
-							style={{ width: `${uploadProgress.progress}%` }}
-						/>
-					</div>
 				</div>
 			)}
 
@@ -2383,6 +2003,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 		}
 	}, []);
 
+	// 迁移旧版 wlist_multipart_* 上传残留为可恢复任务（一次性，键会被清除）
+	useEffect(() => {
+		migrateLegacyUploads(chunkSizeMB);
+	}, [chunkSizeMB]);
+
 	// 展平目录树（查当前目录 / 校验 target 有效性）
 	const allFolderNodes = useMemo(() => {
 		const list: FolderNode[] = [];
@@ -2730,6 +2355,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 					</div>
 				)}
 			</main>
+
+			{/* 全局上传任务面板（多任务并发 / 刷新恢复，独立于文件浏览生命周期） */}
+			<UploadTaskPanel />
 
 			{/* 登录弹窗 */}
 			{showLogin && (

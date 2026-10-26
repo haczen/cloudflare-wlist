@@ -7,6 +7,10 @@ export interface S3Config {
 	secretAccessKey: string;
 	bucket: string;
 	basePath?: string;
+	// When true, use path-style addressing (bucket in the URL path), e.g. for
+	// MinIO without wildcard DNS. Defaults to false = virtual-hosted style
+	// (bucket as subdomain), which AWS S3 / Cloudflare R2 / Aliyun OSS require.
+	forcePathStyle?: boolean;
 }
 
 export interface S3Object {
@@ -25,10 +29,7 @@ export interface ListObjectsResult {
 	nextContinuationToken?: string;
 }
 
-async function hmacSha256(
-	key: ArrayBuffer,
-	message: string
-): Promise<ArrayBuffer> {
+async function hmacSha256(key: ArrayBuffer, message: string): Promise<ArrayBuffer> {
 	const cryptoKey = await crypto.subtle.importKey(
 		"raw",
 		key,
@@ -36,11 +37,7 @@ async function hmacSha256(
 		false,
 		["sign"]
 	);
-	return crypto.subtle.sign(
-		"HMAC",
-		cryptoKey,
-		new TextEncoder().encode(message)
-	);
+	return crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(message));
 }
 
 async function sha256(message: string): Promise<string> {
@@ -57,27 +54,22 @@ function toHex(buffer: ArrayBuffer): string {
 		.join("");
 }
 
-/** AWS SigV4 的 URI 编码比 encodeURIComponent 更严格：!'()* 也必须百分号编码 */
+// AWS SigV4 URI encoding is stricter than encodeURIComponent: ! ' ( ) *
+// must also be percent-encoded in canonical URI/query strings.
 function encodeAwsUriComponent(value: string): string {
-	return encodeURIComponent(value).replace(
-		/[!'()*]/g,
-		(char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+	return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+		`%${char.charCodeAt(0).toString(16).toUpperCase()}`
 	);
 }
 
-function buildCanonicalQueryString(
-	queryParams: Record<string, string>
-): string {
+function buildCanonicalQueryString(queryParams: Record<string, string>): string {
 	return Object.keys(queryParams)
 		.sort()
-		.map(
-			(key) =>
-				`${encodeAwsUriComponent(key)}=${encodeAwsUriComponent(queryParams[key])}`
-		)
+		.map((key) => `${encodeAwsUriComponent(key)}=${encodeAwsUriComponent(queryParams[key])}`)
 		.join("&");
 }
 
-/** 逐段编码路径（签名和实际请求 URL 使用同一编码） */
+// S3 URI encoding - encode each path segment (same for signature and URL)
 function encodeS3Path(path: string): string {
 	return path
 		.split("/")
@@ -98,17 +90,110 @@ async function getSignatureKey(
 	return hmacSha256(kService, "aws4_request");
 }
 
+// Endpoints that cannot support virtual-hosted addressing (bucket-as-subdomain):
+// IP literals, localhost, and explicit non-default ports — typical of MinIO and
+// other self-hosted S3 stacks. For these we default to path-style automatically,
+// so users don't have to flip the forcePathStyle toggle just to make MinIO work.
+// Domain endpoints (AWS S3 / Aliyun OSS) stay virtual-hosted.
+//
+// Backblaze B2 (s3.<region>.backblazeb2.com) supports both styles on paper, but
+// its virtual-hosted signature validation is stricter and rejects signatures that
+// path-style accepts — so default B2 to path-style too.
+//
+// Cloudflare R2 also supports both; we keep it path-style because that is what
+// this project has always used (and local dev pins the R2 host in /etc/hosts —
+// a virtual-hosted <bucket>.<account>.r2... subdomain would miss that pin).
+function looksLikePathStyleEndpoint(endpoint: string): boolean {
+	let url: URL;
+	try {
+		url = new URL(endpoint);
+	} catch {
+		return false;
+	}
+	const host = url.hostname;
+	// Backblaze B2 regional S3 endpoints
+	if (host.endsWith(".backblazeb2.com")) return true;
+	// Cloudflare R2 S3 endpoints
+	if (host.endsWith(".r2.cloudflarestorage.com")) return true;
+	// IPv4 or IPv6 literal (IPv6 hostname has no brackets but keeps colons)
+	if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(":")) return true;
+	// loopback
+	if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") return true;
+	// explicit non-default port (MinIO on a custom port)
+	if (url.port && url.port !== "80" && url.port !== "443") return true;
+	return false;
+}
+
 export class S3Client {
 	private config: S3Config;
+	private readonly forcePathStyle: boolean;
 
 	constructor(config: S3Config) {
 		this.config = config;
+		// Explicit opt-in wins; otherwise auto-detect from the endpoint shape.
+		this.forcePathStyle =
+			config.forcePathStyle === true ? true : looksLikePathStyleEndpoint(config.endpoint);
 	}
 
 	private getFullPath(path: string): string {
 		const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
 		const cleanPath = path.replace(/^\//, "");
 		return basePath ? `${basePath}/${cleanPath}` : cleanPath;
+	}
+
+	// Host header used for both SigV4 signing and the actual request.
+	// Virtual-hosted (default): <bucket>.<endpoint-host>.
+	// Path style: the endpoint host as-is.
+	private getHost(): string {
+		const url = new URL(this.config.endpoint);
+		if (this.forcePathStyle) {
+			return url.host;
+		}
+		const host = url.host;
+		// If the endpoint already encodes the bucket as a subdomain (e.g. a user
+		// pre-configured https://<bucket>.oss-cn-heyuan.aliyuncs.com), don't double
+		// prepend the bucket.
+		if (host.startsWith(`${this.config.bucket}.`)) {
+			return host;
+		}
+		return `${this.config.bucket}.${host}`;
+	}
+
+	// Base URL (scheme + host [+ endpoint pathname]) without the object path.
+	private getBaseUrl(): string {
+		if (this.forcePathStyle) {
+			// Preserve the original endpoint verbatim (existing path-style behavior).
+			return this.config.endpoint;
+		}
+		const url = new URL(this.config.endpoint);
+		const pathname = url.pathname.replace(/\/+$/, "");
+		return `${url.protocol}//${this.getHost()}${pathname}`;
+	}
+
+	// Canonical path for an object operation, given the in-bucket key path
+	// (already includes basePath). Path style: /<bucket>/<keyPath>.
+	// Virtual-hosted: /<keyPath>.
+	private getObjectPath(keyPath: string): string {
+		const normalized = keyPath.startsWith("/") ? keyPath : `/${keyPath}`;
+		if (this.forcePathStyle) {
+			return `/${this.config.bucket}${normalized}`;
+		}
+		return normalized;
+	}
+
+	// Canonical path for bucket-level operations (e.g. ListObjects).
+	private getBucketPath(): string {
+		return this.forcePathStyle ? `/${this.config.bucket}` : "/";
+	}
+
+	// Build a full request URL from a canonical path + optional query string.
+	private buildRequestUrl(path: string, queryString?: string): string {
+		const encodedPath = encodeS3Path(path);
+		let url = `${this.getBaseUrl()}${encodedPath}`;
+		if (queryString) {
+			url += `?${queryString}`;
+		}
+		return url;
 	}
 
 	private async signRequest(
@@ -119,17 +204,15 @@ export class S3Client {
 		payload: string = "",
 		useUnsignedPayload: boolean = false
 	): Promise<Record<string, string>> {
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
 		const dateStamp = amzDate.slice(0, 8);
 
-		const payloadHash = useUnsignedPayload
-			? "UNSIGNED-PAYLOAD"
-			: await sha256(payload);
+		const payloadHash = useUnsignedPayload ? "UNSIGNED-PAYLOAD" : await sha256(payload);
 
-		// host 参与签名但不出现在返回头里——fetch 会自动设置 Host
+		// Headers to sign - host is included in signature but not in returned headers
+		// because fetch API sets Host header automatically
 		const headersToSign: Record<string, string> = {
 			host,
 			"x-amz-content-sha256": payloadHash,
@@ -141,9 +224,7 @@ export class S3Client {
 		const canonicalHeaders = sortedHeaderKeys
 			.map((key) => `${key.toLowerCase()}:${headersToSign[key].trim()}`)
 			.join("\n");
-		const signedHeadersStr = sortedHeaderKeys
-			.map((k) => k.toLowerCase())
-			.join(";");
+		const signedHeadersStr = sortedHeaderKeys.map((k) => k.toLowerCase()).join(";");
 
 		const canonicalQueryString = buildCanonicalQueryString(queryParams);
 
@@ -176,6 +257,7 @@ export class S3Client {
 
 		const authorization = `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
 
+		// Return headers to send with request (exclude host - fetch sets it automatically)
 		return {
 			"x-amz-content-sha256": payloadHash,
 			"x-amz-date": amzDate,
@@ -190,14 +272,14 @@ export class S3Client {
 		maxKeys: number = 1000,
 		continuationToken?: string
 	): Promise<ListObjectsResult> {
-		// 列目录时前缀必须以 / 结尾
+		// Ensure prefix ends with / when listing a directory (not root)
 		let normalizedPrefix = prefix;
 		if (normalizedPrefix && !normalizedPrefix.endsWith("/")) {
 			normalizedPrefix = normalizedPrefix + "/";
 		}
 
 		const fullPrefix = this.getFullPath(normalizedPrefix);
-		const path = `/${this.config.bucket}`;
+		const path = this.getBucketPath();
 
 		const queryParams: Record<string, string> = {
 			"list-type": "2",
@@ -211,15 +293,13 @@ export class S3Client {
 		}
 
 		const headers = await this.signRequest("GET", path, queryParams);
+
 		const queryString = buildCanonicalQueryString(queryParams);
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${path}?${queryString}`,
-			{
-				method: "GET",
-				headers,
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path, queryString), {
+			method: "GET",
+			headers,
+		});
 
 		if (!response.ok) {
 			const text = await response.text();
@@ -230,51 +310,39 @@ export class S3Client {
 		return this.parseListObjectsResponse(xml, fullPrefix);
 	}
 
-	private parseListObjectsResponse(
-		xml: string,
-		fullPrefix: string
-	): ListObjectsResult {
+	private parseListObjectsResponse(xml: string, fullPrefix: string): ListObjectsResult {
 		const objects: S3Object[] = [];
 		const prefixes: string[] = [];
 		const basePath = this.config.basePath?.replace(/^\/|\/$/g, "") || "";
 
-		const decodeXml = (str: string) =>
-			str
-				.replace(/&amp;/g, "&")
-				.replace(/&lt;/g, "<")
-				.replace(/&gt;/g, ">")
-				.replace(/&quot;/g, '"')
-				.replace(/&apos;/g, "'");
+		// Decode XML entities
+		const decodeXml = (str: string) => str
+			.replace(/&amp;/g, "&")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&quot;/g, '"')
+			.replace(/&apos;/g, "'");
 
 		const contentsRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
-		const prefixRegex =
-			/<CommonPrefixes>[\s\S]*?<Prefix>(.*?)<\/Prefix>[\s\S]*?<\/CommonPrefixes>/g;
+		const prefixRegex = /<CommonPrefixes>[\s\S]*?<Prefix>(.*?)<\/Prefix>[\s\S]*?<\/CommonPrefixes>/g;
 
 		let match;
 		while ((match = contentsRegex.exec(xml)) !== null) {
 			const content = match[1];
-			const key = decodeXml(
-				content.match(/<Key>(.*?)<\/Key>/)?.[1] || ""
-			);
-			const size = parseInt(
-				content.match(/<Size>(.*?)<\/Size>/)?.[1] || "0",
-				10
-			);
-			const lastModified =
-				content.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] || "";
+			const key = decodeXml(content.match(/<Key>(.*?)<\/Key>/)?.[1] || "");
+			const size = parseInt(content.match(/<Size>(.*?)<\/Size>/)?.[1] || "0", 10);
+			const lastModified = content.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] || "";
 			const etag = content.match(/<ETag>"?(.*?)"?<\/ETag>/)?.[1] || "";
 
-			// 去掉 basePath 前缀得到展示 key
-			const displayKey =
-				basePath && key.startsWith(basePath + "/")
-					? key.slice(basePath.length + 1)
-					: key;
+			// Remove basePath prefix to get display key
+			const displayKey = basePath && key.startsWith(basePath + "/")
+				? key.slice(basePath.length + 1)
+				: key;
 
-			// 去掉当前目录前缀得到文件名
-			const relativePrefix =
-				basePath && fullPrefix.startsWith(basePath + "/")
-					? fullPrefix.slice(basePath.length + 1)
-					: fullPrefix;
+			// Remove the current folder prefix to get just the name
+			const relativePrefix = basePath && fullPrefix.startsWith(basePath + "/")
+				? fullPrefix.slice(basePath.length + 1)
+				: fullPrefix;
 
 			const name = displayKey.startsWith(relativePrefix)
 				? displayKey.slice(relativePrefix.length)
@@ -295,15 +363,15 @@ export class S3Client {
 		while ((match = prefixRegex.exec(xml)) !== null) {
 			const p = decodeXml(match[1]);
 
-			const displayPrefix =
-				basePath && p.startsWith(basePath + "/")
-					? p.slice(basePath.length + 1)
-					: p;
+			// Remove basePath prefix to get display prefix
+			const displayPrefix = basePath && p.startsWith(basePath + "/")
+				? p.slice(basePath.length + 1)
+				: p;
 
-			const relativePrefix =
-				basePath && fullPrefix.startsWith(basePath + "/")
-					? fullPrefix.slice(basePath.length + 1)
-					: fullPrefix;
+			// Remove the current folder prefix to get just the name
+			const relativePrefix = basePath && fullPrefix.startsWith(basePath + "/")
+				? fullPrefix.slice(basePath.length + 1)
+				: fullPrefix;
 
 			const name = displayPrefix.startsWith(relativePrefix)
 				? displayPrefix.slice(relativePrefix.length).replace(/\/$/, "")
@@ -322,9 +390,7 @@ export class S3Client {
 		}
 
 		const isTruncated = xml.includes("<IsTruncated>true</IsTruncated>");
-		const nextToken = xml.match(
-			/<NextContinuationToken>(.*?)<\/NextContinuationToken>/
-		)?.[1];
+		const nextToken = xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1];
 
 		return {
 			objects: objects.sort((a, b) => {
@@ -341,11 +407,10 @@ export class S3Client {
 
 	async getObject(key: string): Promise<Response> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("GET", path);
-		const encodedPath = encodeS3Path(path);
 
-		const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
 			method: "GET",
 			headers,
 		});
@@ -359,10 +424,9 @@ export class S3Client {
 
 	async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const encodedPath = encodeS3Path(path);
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -403,7 +467,7 @@ export class S3Client {
 		);
 		const signature = toHex(await hmacSha256(signingKey, stringToSign));
 
-		return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
 	async getSignedUploadPartUrl(
@@ -413,10 +477,9 @@ export class S3Client {
 		expiresIn: number = 3600
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
+		const path = this.getObjectPath(fullKey);
 		const encodedPath = encodeS3Path(path);
-		const url = new URL(this.config.endpoint);
-		const host = url.host;
+		const host = this.getHost();
 
 		const now = new Date();
 		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -429,8 +492,8 @@ export class S3Client {
 			"X-Amz-Date": amzDate,
 			"X-Amz-Expires": expiresIn.toString(),
 			"X-Amz-SignedHeaders": "host",
-			partNumber: partNumber.toString(),
-			uploadId: uploadId,
+			"partNumber": partNumber.toString(),
+			"uploadId": uploadId,
 		};
 
 		const canonicalQueryString = buildCanonicalQueryString(queryParams);
@@ -459,17 +522,12 @@ export class S3Client {
 		);
 		const signature = toHex(await hmacSha256(signingKey, stringToSign));
 
-		return `${this.config.endpoint}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
-	async putObject(
-		key: string,
-		body: ArrayBuffer | string,
-		contentType?: string
-	): Promise<void> {
+	async putObject(key: string, body: ArrayBuffer | string, contentType?: string): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 
 		let bodyData: ArrayBuffer;
 		if (typeof body === "string") {
@@ -478,10 +536,10 @@ export class S3Client {
 			bodyData = body;
 		}
 
-		// 二进制上传使用 UNSIGNED-PAYLOAD
+		// Use UNSIGNED-PAYLOAD for binary uploads
 		const headers = await this.signRequest("PUT", path, {}, {}, "", true);
 
-		const response = await fetch(`${this.config.endpoint}${encodedPath}`, {
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
 			method: "PUT",
 			headers: {
 				...headers,
@@ -498,17 +556,13 @@ export class S3Client {
 
 	async deleteObject(key: string): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("DELETE", path);
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
-			{
-				method: "DELETE",
-				headers,
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
+			method: "DELETE",
+			headers,
+		});
 
 		if (!response.ok && response.status !== 204) {
 			const text = await response.text();
@@ -519,36 +573,26 @@ export class S3Client {
 	async copyObject(sourceKey: string, destKey: string): Promise<void> {
 		const fullSourceKey = this.getFullPath(sourceKey);
 		const fullDestKey = this.getFullPath(destKey);
-		const path = `/${this.config.bucket}/${fullDestKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullDestKey);
 
-		// x-amz-copy-source 必须 URL 编码
+		// x-amz-copy-source always carries the bucket name regardless of addressing
+		// style (it identifies the source object, not the request endpoint).
 		const copySource = `/${this.config.bucket}/${fullSourceKey}`
 			.split("/")
 			.map((segment) => encodeAwsUriComponent(segment))
 			.join("/");
 
-		const headers = await this.signRequest(
-			"PUT",
-			path,
-			{},
-			{
-				"x-amz-copy-source": copySource,
-			}
-		);
+		const headers = await this.signRequest("PUT", path, {}, {
+			"x-amz-copy-source": copySource,
+		});
 
-		// 大对象服务端复制可能较慢，放宽到 120s
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
-			{
-				method: "PUT",
-				headers: {
-					...headers,
-					"x-amz-copy-source": copySource,
-				},
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
+			method: "PUT",
+			headers: {
+				...headers,
+				"x-amz-copy-source": copySource,
 			},
-			120_000
-		);
+		});
 
 		if (!response.ok) {
 			const text = await response.text();
@@ -557,32 +601,20 @@ export class S3Client {
 	}
 
 	async createFolder(folderPath: string): Promise<void> {
-		// S3 用以斜杠结尾的空对象表示目录
-		const normalizedPath = folderPath.endsWith("/")
-			? folderPath
-			: folderPath + "/";
+		// S3 folders are represented by empty objects with trailing slash
+		const normalizedPath = folderPath.endsWith("/") ? folderPath : folderPath + "/";
 		await this.putObject(normalizedPath, "", "application/x-directory");
 	}
 
-	async headObject(
-		key: string
-	): Promise<{
-		contentLength: number;
-		contentType: string;
-		lastModified: string;
-	} | null> {
+	async headObject(key: string): Promise<{ contentLength: number; contentType: string; lastModified: string } | null> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("HEAD", path);
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}`,
-			{
-				method: "HEAD",
-				headers,
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
+			method: "HEAD",
+			headers,
+		});
 
 		if (response.status === 404) {
 			return null;
@@ -593,13 +625,8 @@ export class S3Client {
 		}
 
 		return {
-			contentLength: parseInt(
-				response.headers.get("content-length") || "0",
-				10
-			),
-			contentType:
-				response.headers.get("content-type") ||
-				"application/octet-stream",
+			contentLength: parseInt(response.headers.get("content-length") || "0", 10),
+			contentType: response.headers.get("content-type") || "application/octet-stream",
 			lastModified: response.headers.get("last-modified") || "",
 		};
 	}
@@ -610,30 +637,24 @@ export class S3Client {
 		_options?: { size?: number; chunkSize?: number }
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams = { uploads: "" };
 
 		const headers = await this.signRequest("POST", path, queryParams, {
 			"Content-Type": contentType,
 		});
 
-		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?uploads`,
-			{
-				method: "POST",
-				headers: {
-					...headers,
-					"Content-Type": contentType,
-				},
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path, "uploads"), {
+			method: "POST",
+			headers: {
+				...headers,
+				"Content-Type": contentType,
+			},
+		});
 
 		if (!response.ok) {
 			const text = await response.text();
-			throw new Error(
-				`S3 InitiateMultipartUpload failed: ${response.status} ${text}`
-			);
+			throw new Error(`S3 InitiateMultipartUpload failed: ${response.status} ${text}`);
 		}
 
 		const xml = await response.text();
@@ -653,23 +674,17 @@ export class S3Client {
 		contentLength?: number
 	): Promise<string> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 
-		// 查询参数必须按字母序参与签名
+		// Query params must be sorted alphabetically for signature
 		const queryParams: Record<string, string> = {
 			partNumber: partNumber.toString(),
 			uploadId: uploadId,
 		};
 
-		const headers = await this.signRequest(
-			"PUT",
-			path,
-			queryParams,
-			{},
-			"",
-			true
-		);
+		const headers = await this.signRequest("PUT", path, queryParams, {}, "", true);
+
+		// Build query string in same sorted order as signature
 		const queryString = buildCanonicalQueryString(queryParams);
 
 		const fetchHeaders: Record<string, string> = { ...headers };
@@ -677,16 +692,13 @@ export class S3Client {
 			fetchHeaders["Content-Length"] = contentLength.toString();
 		}
 
-		const response = await fetch(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
-			{
-				method: "PUT",
-				headers: fetchHeaders,
-				body,
-				// @ts-expect-error - 流式请求体必须指定 duplex
-				duplex: "half",
-			}
-		);
+		const response = await fetchWithTimeout(this.buildRequestUrl(path, queryString), {
+			method: "PUT",
+			headers: fetchHeaders,
+			body,
+			// @ts-expect-error - duplex is required for streaming body
+			duplex: "half",
+		});
 
 		if (!response.ok) {
 			const text = await response.text();
@@ -707,33 +719,26 @@ export class S3Client {
 		parts: { partNumber: number; etag: string }[]
 	): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams: Record<string, string> = { uploadId };
 
 		const partsXml = parts
 			.sort((a, b) => a.partNumber - b.partNumber)
 			.map(
-				(p) =>
-					`<Part><PartNumber>${p.partNumber}</PartNumber><ETag>"${p.etag}"</ETag></Part>`
+				(p) => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>"${p.etag}"</ETag></Part>`
 			)
 			.join("");
 		const body = `<CompleteMultipartUpload>${partsXml}</CompleteMultipartUpload>`;
 
-		const headers = await this.signRequest(
-			"POST",
-			path,
-			queryParams,
-			{
-				"Content-Type": "application/xml",
-			},
-			body
-		);
+		const headers = await this.signRequest("POST", path, queryParams, {
+			"Content-Type": "application/xml",
+		}, body);
+
+		// Build query string in same sorted order as signature
 		const queryString = buildCanonicalQueryString(queryParams);
 
-		// 分片很多时合并耗时较长，放宽到 120s
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "POST",
 				headers: {
@@ -741,32 +746,27 @@ export class S3Client {
 					"Content-Type": "application/xml",
 				},
 				body,
-			},
-			120_000
+			}
 		);
 
 		if (!response.ok) {
 			const text = await response.text();
-			throw new Error(
-				`S3 CompleteMultipartUpload failed: ${response.status} ${text}`
-			);
+			throw new Error(`S3 CompleteMultipartUpload failed: ${response.status} ${text}`);
 		}
 	}
 
-	async abortMultipartUpload(
-		key: string,
-		uploadId: string
-	): Promise<void> {
+	async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
 		const fullKey = this.getFullPath(key);
-		const path = `/${this.config.bucket}/${fullKey}`;
-		const encodedPath = encodeS3Path(path);
+		const path = this.getObjectPath(fullKey);
 		const queryParams: Record<string, string> = { uploadId };
 
 		const headers = await this.signRequest("DELETE", path, queryParams);
+
+		// Build query string in same sorted order as signature
 		const queryString = buildCanonicalQueryString(queryParams);
 
 		const response = await fetchWithTimeout(
-			`${this.config.endpoint}${encodedPath}?${queryString}`,
+			this.buildRequestUrl(path, queryString),
 			{
 				method: "DELETE",
 				headers,
@@ -775,9 +775,7 @@ export class S3Client {
 
 		if (!response.ok && response.status !== 204) {
 			const text = await response.text();
-			throw new Error(
-				`S3 AbortMultipartUpload failed: ${response.status} ${text}`
-			);
+			throw new Error(`S3 AbortMultipartUpload failed: ${response.status} ${text}`);
 		}
 	}
 }
