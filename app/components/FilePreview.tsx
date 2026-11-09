@@ -69,6 +69,61 @@ function formatSize(bytes: number): string {
 	return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+// ---------- 媒体源：签名直链优先，失败回退代理 ----------
+// 视频/音频直连存储端后 <video> 可用 Range 拖动进度；大文件不占 Workers 流量。
+// <img>/<video>/<audio>/<iframe> 不受存储端 CORS 限制，直链可用；
+// 文本/Office/ZIP 预览用 fetch 拉取，仍走代理。
+
+function useMediaSrc(
+	storageId: number,
+	path: string,
+	proxyUrl: string,
+	enabled: boolean,
+	token?: string,
+	password?: string
+): { src: string | null; handleError: () => void } {
+	const [signed, setSigned] = useState<string | null>(null);
+	const [failed, setFailed] = useState(false);
+	useEffect(() => {
+		if (!enabled) return;
+		let alive = true;
+		const params: Record<string, string> = {
+			action: "signed-url",
+			disposition: "inline",
+		};
+		if (token) params.token = token;
+		if (password) params.password = password;
+		fetch(buildUrl(storageId, path, params, token, password))
+			.then((res) => (res.ok ? (res.json() as Promise<{ url?: string } | null>) : null))
+			.then((data: { url?: string } | null) => {
+				if (alive && data?.url) setSigned(data.url);
+			})
+			.catch(() => {
+				/* 保持代理 */
+			});
+		return () => {
+			alive = false;
+		};
+	}, [storageId, path, enabled, token, password]);
+
+	// 直链还没回来时返回 null（外层显示加载中）；明确失败则回退代理
+	if (failed) {
+		return { src: proxyUrl, handleError: () => {} };
+	}
+	if (!signed) {
+		return { src: enabled ? null : proxyUrl, handleError: () => setFailed(true) };
+	}
+	return { src: signed, handleError: () => setFailed(true) };
+}
+
+function MediaLoading() {
+	return (
+		<div className="flex h-48 items-center justify-center">
+			<SpinnerIcon className="h-8 w-8 animate-spin text-zinc-400" />
+		</div>
+	);
+}
+
 // ---------- 文本 / 代码 ----------
 
 function TextPreview({
@@ -479,7 +534,13 @@ function ZipPreview({ url }: { url: string }) {
 
 // ---------- 视频带时长显示 ----------
 
-function VideoPreview({ url }: { url: string }) {
+function VideoPreview({
+	url,
+	onError,
+}: {
+	url: string;
+	onError?: () => void;
+}) {
 	const [duration, setDuration] = useState<number | null>(null);
 	const onLoadedMetadata = useCallback(
 		(event: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -499,6 +560,7 @@ function VideoPreview({ url }: { url: string }) {
 				controls
 				autoPlay
 				onLoadedMetadata={onLoadedMetadata}
+				onError={onError}
 			/>
 			{duration !== null && (
 				<p className="text-xs text-zinc-500">
@@ -550,26 +612,53 @@ export function FilePreview({
 		token,
 		password
 	);
+	// 媒体类（图/视频/音频/PDF）优先签名直链：视频可用 Range 拖进度、不占 Workers 流量
+	const isMediaType = ["image", "video", "audio", "pdf"].includes(currentType);
+	const media = useMediaSrc(
+		storageId,
+		path,
+		inlineUrl,
+		isMediaType,
+		token,
+		password
+	);
 
 	const renderContent = () => {
 		switch (currentType) {
 			case "image":
-				return (
+				return media.src ? (
 					<img
 						className="max-h-[70vh] w-auto max-w-full rounded-lg object-contain"
-						src={inlineUrl}
+						src={media.src}
 						alt={fileName}
+						onError={media.handleError}
 					/>
+				) : (
+					<MediaLoading />
 				);
 			case "video":
-				return <VideoPreview url={inlineUrl} />;
+				return media.src ? (
+					<VideoPreview url={media.src} onError={media.handleError} />
+				) : (
+					<MediaLoading />
+				);
 			case "audio":
 				return (
 					<div className="flex w-full max-w-lg flex-col items-center gap-4 p-8">
 						<div className="flex h-32 w-32 items-center justify-center rounded-2xl bg-gradient-to-br from-pink-500/20 to-purple-500/20 text-5xl">
 							🎵
 						</div>
-						<audio className="w-full" src={inlineUrl} controls autoPlay />
+						{media.src ? (
+							<audio
+								className="w-full"
+								src={media.src}
+								controls
+								autoPlay
+								onError={media.handleError}
+							/>
+						) : (
+							<SpinnerIcon className="h-6 w-6 animate-spin text-zinc-400" />
+						)}
 					</div>
 				);
 			case "markdown":
@@ -579,12 +668,14 @@ export function FilePreview({
 			case "text":
 				return <TextPreview url={inlineUrl} fileName={fileName} language="plaintext" />;
 			case "pdf":
-				return (
+				return media.src ? (
 					<iframe
 						className="h-[70vh] w-full rounded-lg bg-white lg:w-[60vw]"
-						src={inlineUrl}
+						src={media.src}
 						title={fileName}
 					/>
+				) : (
+					<MediaLoading />
 				);
 			case "docx":
 				return <DocxPreview url={inlineUrl} />;

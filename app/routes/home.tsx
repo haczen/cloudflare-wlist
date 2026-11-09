@@ -36,6 +36,85 @@ function enrichFolderTree(
 		children: enrichFolderTree(node.children, accessMap),
 	}));
 }
+
+// ---------- 网格缩略图：签名直链加载（并发受限），失败回退代理 ----------
+
+/** 同时在途的签名 URL 请求上限：直链省 Workers 流量，但每个缩略图都要 worker 签一次名，限流避免打爆 */
+const THUMB_CONCURRENCY = 4;
+let thumbActive = 0;
+const thumbQueue: Array<() => void> = [];
+
+async function withThumbSlot<T>(fn: () => Promise<T>): Promise<T> {
+	while (thumbActive >= THUMB_CONCURRENCY) {
+		await new Promise<void>((resolve) => thumbQueue.push(resolve));
+	}
+	thumbActive++;
+	try {
+		return await fn();
+	} finally {
+		thumbActive--;
+		thumbQueue.shift()?.();
+	}
+}
+
+async function fetchThumbSignedUrl(
+	storageId: number,
+	key: string
+): Promise<string | null> {
+	try {
+		return await withThumbSlot(async () => {
+			const res = await fetch(
+				apiFileUrl(storageId, key, {
+					action: "signed-url",
+					thumb: "1",
+				})
+			);
+			if (!res.ok) return null;
+			const data = (await res.json()) as { url?: string };
+			return data.url || null;
+		});
+	} catch {
+		return null;
+	}
+}
+
+function ThumbImage({
+	storageId,
+	objKey,
+	name,
+}: {
+	storageId: number;
+	objKey: string;
+	name: string;
+}) {
+	const [signed, setSigned] = useState<string | null>(null);
+	const [failed, setFailed] = useState(false);
+	useEffect(() => {
+		let alive = true;
+		void fetchThumbSignedUrl(storageId, objKey).then((url) => {
+			if (alive) setSigned(url);
+		});
+		return () => {
+			alive = false;
+		};
+	}, [storageId, objKey]);
+
+	if (!signed && !failed) {
+		return (
+			<div className="h-20 w-20 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+		);
+	}
+	// 签名直链加载失败（如存储端 CORS/网络）→ 回退 Worker 代理
+	return (
+		<img
+			className="h-20 w-20 rounded-lg object-cover"
+			src={failed ? apiFileUrl(storageId, objKey) : signed!}
+			alt={name}
+			loading="lazy"
+			onError={() => setFailed(true)}
+		/>
+	);
+}
 import { getFileType, isPreviewable } from "~/lib/file-utils";
 import { apiFileUrl } from "~/lib/api-path";
 import { FilePreview } from "~/components/FilePreview";
@@ -757,12 +836,37 @@ function FileBrowser({
 
 	const downloadObject = (obj: S3Object) => {
 		if (obj.isDirectory || !canDownload) return;
-		const link = document.createElement("a");
-		link.href = apiFileUrl(storage.id, obj.key, { action: "download" });
-		link.download = obj.name;
-		document.body.appendChild(link);
-		link.click();
-		link.remove();
+		const trigger = (href: string, fallbackName?: string) => {
+			const link = document.createElement("a");
+			link.href = href;
+			if (fallbackName) link.download = fallbackName;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+		};
+		// 优先预签名直链（不占 Workers 流量、免费额度不消耗、无网关限速）；
+		// 直链生成失败再回退 Workers 代理下载
+		void (async () => {
+			try {
+				const res = await fetch(
+					apiFileUrl(storage.id, obj.key, {
+						action: "signed-url",
+						disposition: "attachment",
+					})
+				);
+				const data = (await res.json()) as { url?: string };
+				if (res.ok && data.url) {
+					trigger(data.url);
+					return;
+				}
+			} catch {
+				// 走代理
+			}
+			trigger(
+				apiFileUrl(storage.id, obj.key, { action: "download" }),
+				obj.name
+			);
+		})();
 	};
 
 	/** 复制预签名直链（仅文件） */
@@ -891,14 +995,22 @@ function FileBrowser({
 						failed++;
 					}
 				}
-				for (const file of files) {
+				if (files.length > 0) {
+					// 文件走批量删除端点：一次请求删全部（S3 单请求可删 1000 个 key）
 					try {
-						const res = await fetch(apiFileUrl(storage.id, file.key), {
-							method: "DELETE",
-						});
-						if (!res.ok) failed++;
+						const res = await fetch(
+							apiFileUrl(storage.id, "", { action: "batch-delete" }),
+							{
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({
+									paths: files.map((f) => f.key),
+								}),
+							}
+						);
+						if (!res.ok) failed += files.length;
 					} catch {
-						failed++;
+						failed += files.length;
 					}
 				}
 				if (failed > 0) {
@@ -1526,11 +1638,10 @@ function FileBrowser({
 								{!obj.isDirectory &&
 								getFileType(obj.name) === "image" &&
 								canDownload ? (
-									<img
-										className="h-20 w-20 rounded-lg object-cover"
-										src={apiFileUrl(storage.id, obj.key)}
-										alt={obj.name}
-										loading="lazy"
+									<ThumbImage
+										storageId={storage.id}
+										objKey={obj.key}
+										name={obj.name}
 									/>
 								) : (
 									<FileTypeIcon

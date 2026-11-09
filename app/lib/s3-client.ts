@@ -1,4 +1,22 @@
 import { fetchWithTimeout } from "./fetch-timeout";
+import { md5Hex } from "./md5";
+
+function hexToBytes(hex: string): Uint8Array {
+	const out = new Uint8Array(hex.length / 2);
+	for (let i = 0; i < out.length; i++) {
+		out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+	}
+	return out;
+}
+
+function escapeXml(value: string): string {
+	return value
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
+}
 
 export interface S3Config {
 	endpoint: string;
@@ -405,10 +423,13 @@ export class S3Client {
 		};
 	}
 
-	async getObject(key: string): Promise<Response> {
+	async getObject(key: string, rangeHeader?: string): Promise<Response> {
 		const fullKey = this.getFullPath(key);
 		const path = this.getObjectPath(fullKey);
 		const headers = await this.signRequest("GET", path);
+		if (rangeHeader) {
+			headers["Range"] = rangeHeader;
+		}
 
 		const response = await fetchWithTimeout(this.buildRequestUrl(path), {
 			method: "GET",
@@ -422,7 +443,11 @@ export class S3Client {
 		return response;
 	}
 
-	async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
+	async getSignedUrl(
+		key: string,
+		expiresIn: number = 3600,
+		options: { disposition?: "attachment" | "inline" } = {}
+	): Promise<string> {
 		const fullKey = this.getFullPath(key);
 		const path = this.getObjectPath(fullKey);
 		const encodedPath = encodeS3Path(path);
@@ -440,6 +465,13 @@ export class S3Client {
 			"X-Amz-Expires": expiresIn.toString(),
 			"X-Amz-SignedHeaders": "host",
 		};
+		if (options.disposition) {
+			// 强制浏览器下载/内联展示，并带正确文件名（跨域 <a download> 属性无效，须由服务端下发）
+			const fileName = fullKey.split("/").pop() || "download";
+			const asciiName = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+			queryParams["response-content-disposition"] =
+				`${options.disposition}; filename="${asciiName}"; filename*=UTF-8''${encodeAwsUriComponent(fileName)}`;
+		}
 
 		const canonicalQueryString = buildCanonicalQueryString(queryParams);
 
@@ -568,6 +600,64 @@ export class S3Client {
 			const text = await response.text();
 			throw new Error(`S3 DeleteObject failed: ${response.status} ${text}`);
 		}
+	}
+
+	/**
+	 * 批量删除（S3 DeleteObjects，一次最多 1000 个 key）。
+	 * 返回删除成功的 key 数；部分失败时合并错误信息抛出。
+	 */
+	async deleteObjects(keys: string[]): Promise<number> {
+		if (keys.length === 0) return 0;
+		const MAX_BATCH = 1000;
+		let deleted = 0;
+		const errors: string[] = [];
+
+		for (let i = 0; i < keys.length; i += MAX_BATCH) {
+			const batch = keys.slice(i, i + MAX_BATCH);
+			const body =
+				"<Delete>" +
+				batch.map((k) => `<Object><Key>${escapeXml(this.getFullPath(k))}</Key></Object>`).join("") +
+				"</Delete>";
+
+			const path = this.getBucketPath();
+			const bodyBytes = new TextEncoder().encode(body);
+			// S3 DeleteObjects 要求 Content-MD5 头（Workers Web Crypto 无 MD5，用纯 JS 实现）
+			const bodyMd5 = md5Hex(bodyBytes);
+			const b64Md5 = btoa(String.fromCharCode(...hexToBytes(bodyMd5)));
+
+			const headers = await this.signRequest(
+				"POST",
+				path,
+				{ delete: "" },
+				{ "Content-MD5": b64Md5 },
+				body
+			);
+
+			const response = await fetchWithTimeout(
+				this.buildRequestUrl(path, buildCanonicalQueryString({ delete: "" })),
+				{
+					method: "POST",
+					headers: { ...headers, "Content-MD5": b64Md5 },
+					body: bodyBytes,
+				}
+			);
+
+			if (!response.ok) {
+				const text = await response.text();
+				throw new Error(`S3 DeleteObjects failed: ${response.status} ${text}`);
+			}
+
+			const xml = await response.text();
+			deleted += (xml.match(/<Deleted>/g) || []).length;
+			for (const m of xml.matchAll(/<Error>.*?<Key>(.*?)<\/Key>.*?<Message>(.*?)<\/Message>.*?<\/Error>/gs)) {
+				errors.push(`${m[1]}: ${m[2]}`);
+			}
+		}
+
+		if (errors.length > 0) {
+			throw new Error(`部分对象删除失败：${errors.slice(0, 3).join("; ")}${errors.length > 3 ? " 等" : ""}`);
+		}
+		return deleted;
 	}
 
 	async copyObject(sourceKey: string, destKey: string): Promise<void> {

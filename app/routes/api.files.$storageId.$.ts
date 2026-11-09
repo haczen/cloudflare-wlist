@@ -165,16 +165,18 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 		}
 	}
 
-	// 下载文件（Workers 代理转发）
+	// 下载文件（Workers 代理转发；支持 Range 断点/拖动播放）
 	if (action === "download") {
 		try {
+			const rangeHeader = request.headers.get("Range") || undefined;
 			const response = await withClientState(client, db, storageId, () =>
-				client.getObject(path)
+				client.getObject(path, rangeHeader)
 			);
 			const contentType =
 				response.headers.get("content-type") ||
 				"application/octet-stream";
 			const contentLength = response.headers.get("content-length");
+			const contentRange = response.headers.get("content-range");
 
 			const fileName = path.split("/").pop() || "download";
 
@@ -189,12 +191,17 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 			});
 
 			const inline = url.searchParams.get("inline") === "1";
+			const headers: Record<string, string> = {
+				"Content-Type": contentType,
+				"Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${encodeURIComponent(fileName)}"`,
+				"Accept-Ranges": "bytes",
+			};
+			if (contentLength) headers["Content-Length"] = contentLength;
+			if (contentRange) headers["Content-Range"] = contentRange;
+			// 206 是 Range 命中的正常状态，不是错误
 			return new Response(response.body, {
-				headers: {
-					"Content-Type": contentType,
-					"Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${encodeURIComponent(fileName)}"`,
-					...(contentLength ? { "Content-Length": contentLength } : {}),
-				},
+				status: contentRange ? 206 : 200,
+				headers,
 			});
 		} catch (error) {
 			return Response.json(
@@ -212,17 +219,28 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 	// 生成预签名下载 URL
 	if (action === "signed-url") {
 		try {
+			// disposition=attachment → 浏览器强制下载（跨域直链 <a download> 无效，须服务端下发）
+			// thumb=1 → 缩略图加载（高频低价值，跳过审计写库）
+			const disposition = url.searchParams.get("disposition");
+			const isThumb = url.searchParams.get("thumb") === "1";
 			const signedUrl = await withClientState(client, db, storageId, () =>
-				client.getSignedUrl(path)
+				client.getSignedUrl(path, 3600, {
+					disposition:
+						disposition === "attachment" || disposition === "inline"
+							? disposition
+							: undefined,
+				})
 			);
-			await logAudit(db, {
-				action: "file.signed_url",
-				userType,
-				ip: meta.ip,
-				userAgent: meta.userAgent,
-				storageId,
-				path,
-			});
+			if (!isThumb) {
+				await logAudit(db, {
+					action: "file.signed_url",
+					userType,
+					ip: meta.ip,
+					userAgent: meta.userAgent,
+					storageId,
+					path,
+				});
+			}
 			return Response.json({ url: signedUrl });
 		} catch (error) {
 			return Response.json(
@@ -946,10 +964,22 @@ export async function action({
 					path
 				);
 
-				for (const key of keysToDelete) {
-					await withClientState(client, db, storageId, () =>
-						client.deleteObject(key)
+				let deleted = 0;
+				const batchClient = client as unknown as {
+					deleteObjects?: (keys: string[]) => Promise<number>;
+				};
+				if (typeof batchClient.deleteObjects === "function") {
+					// S3 DeleteObjects 一次请求删 1000 个 key
+					deleted = await withClientState(client, db, storageId, () =>
+						batchClient.deleteObjects!(keysToDelete)
 					);
+				} else {
+					for (const key of keysToDelete) {
+						await withClientState(client, db, storageId, () =>
+							client.deleteObject(key)
+						);
+					}
+					deleted = keysToDelete.length;
 				}
 
 				// 尝试删除目录占位对象本身
@@ -968,11 +998,11 @@ export async function action({
 					userAgent: meta.userAgent,
 					storageId,
 					path,
-					detail: { deleted: keysToDelete.length },
+					detail: { deleted },
 				});
 				return Response.json({
 					success: true,
-					deleted: keysToDelete.length,
+					deleted,
 				});
 			} catch (error) {
 				return Response.json(
@@ -1008,6 +1038,61 @@ export async function action({
 						error instanceof Error
 							? error.message
 							: "Failed to delete file",
+				},
+				{ status: 500 }
+			);
+		}
+	}
+
+	// 批量删除（一次请求删多个文件；文件夹仍走 rmdir 递归）
+	if (method === "POST" && action === "batch-delete") {
+		try {
+			const body = (await request.json()) as { paths?: string[] };
+			const paths = (body.paths || []).filter((p) => typeof p === "string" && p && !p.endsWith("/"));
+			if (paths.length === 0) {
+				return Response.json({ error: "paths is required" }, { status: 400 });
+			}
+
+			let deleted = 0;
+			const batchClient = client as unknown as {
+				deleteObjects?: (keys: string[]) => Promise<number>;
+			};
+			if (typeof batchClient.deleteObjects === "function") {
+				deleted = await withClientState(client, db, storageId, () =>
+					batchClient.deleteObjects!(paths)
+				);
+			} else {
+				let failed = 0;
+				for (const p of paths) {
+					try {
+						await withClientState(client, db, storageId, () => client.deleteObject(p));
+						deleted++;
+					} catch {
+						failed++;
+					}
+				}
+				if (failed > 0) {
+					return Response.json({ success: false, deleted, failed }, { status: 500 });
+				}
+			}
+
+			await logAudit(db, {
+				action: "file.batch_delete",
+				userType,
+				ip: meta.ip,
+				userAgent: meta.userAgent,
+				storageId,
+				path: paths[0],
+				detail: { deleted, count: paths.length },
+			});
+			return Response.json({ success: true, deleted });
+		} catch (error) {
+			return Response.json(
+				{
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to batch delete",
 				},
 				{ status: 500 }
 			);
