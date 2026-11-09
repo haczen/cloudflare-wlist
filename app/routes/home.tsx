@@ -20,6 +20,8 @@ import {
 	type EnqueueEntry,
 } from "~/lib/upload-manager";
 import { UploadTaskPanel } from "~/components/UploadTaskPanel";
+import SitePet from "~/components/SitePet";
+import WelcomeDialog from "~/components/WelcomeDialog";
 
 // ---------- 带权限的目录树节点 ----------
 
@@ -308,6 +310,9 @@ interface S3Object {
 	size: number;
 	lastModified: string;
 	isDirectory: boolean;
+	/** 聚合盘文件：key 为 pool:<fileId>，操作走 /api/pool */
+	pool?: boolean;
+	fileId?: string;
 }
 
 /** 除百度网盘（不支持分块）外全部支持 */
@@ -540,6 +545,7 @@ function FileBrowser({
 	rootLabel,
 	currentFolderId,
 	folderAccess,
+	folderMode,
 	storageOptions,
 	onFoldersChanged,
 }: {
@@ -554,6 +560,8 @@ function FileBrowser({
 	currentFolderId: number | null;
 	/** 当前虚拟目录的访问权限（管理员忽略） */
 	folderAccess: { list: boolean; download: boolean; upload: boolean };
+	/** 聚合盘目录：列表/上传/下载/删除全部走聚合通道 */
+	folderMode: "normal" | "pool";
 	/** 当前用户可上传的桶（供"新建文件"对话框选择目标） */
 	storageOptions: StorageOption[];
 	/** 目录树变更后刷新侧边栏 */
@@ -660,6 +668,40 @@ function FileBrowser({
 		setLoading(true);
 		setError("");
 		try {
+			// 聚合盘目录：清单来自 D1（pool_files），不列桶
+			if (folderMode === "pool" && currentFolderId !== null) {
+				const res = await fetch(
+					`/api/pool?folderId=${currentFolderId}`,
+					{ cache: "no-store" }
+				);
+				if (seq !== listSeqRef.current) return;
+				if (res.ok) {
+					const data = (await res.json()) as {
+						files?: Array<{
+							id: string;
+							name: string;
+							size: number;
+							createdAt: string;
+						}>;
+					};
+					setObjects(
+						(data.files || []).map((f) => ({
+							key: `pool:${f.id}`,
+							fileId: f.id,
+							pool: true,
+							name: f.name,
+							size: f.size,
+							lastModified: f.createdAt,
+							isDirectory: false,
+						}))
+					);
+				} else {
+					const data = (await res.json().catch(() => ({}))) as { error?: string };
+					setObjects([]);
+					setError(data.error || "加载失败");
+				}
+				return;
+			}
 			const res = await fetch(apiFileUrl(storage.id, path, { action: "list" }));
 			if (seq !== listSeqRef.current) return;
 			if (res.ok) {
@@ -681,7 +723,7 @@ function FileBrowser({
 				setLoading(false);
 			}
 		}
-	}, [storage.id, path, canList]);
+	}, [storage.id, path, canList, folderMode, currentFolderId]);
 
 	useEffect(() => {
 		loadFiles();
@@ -820,6 +862,10 @@ function FileBrowser({
 			path,
 			chunkSize,
 			multipartSupported: supportsMultipart(storage.type),
+			// 聚合盘目录：走跨桶分片通道（服务端决定分布）
+			...(folderMode === "pool" && currentFolderId !== null
+				? { pool: { folderId: currentFolderId } }
+				: {}),
 		});
 	};
 
@@ -879,6 +925,9 @@ function FileBrowser({
 	const openObject = (obj: S3Object) => {
 		if (obj.isDirectory) {
 			navigateTo(normalizeDirPath(obj.key));
+		} else if (obj.pool) {
+			// 聚合盘文件不支持在线预览，直接走下载
+			window.location.href = `/api/pool/${obj.fileId}?download=1`;
 		} else if (isPreviewable(obj.name)) {
 			setPreviewFile(obj);
 		} else if (canDownload) {
@@ -888,6 +937,11 @@ function FileBrowser({
 
 	const downloadObject = (obj: S3Object) => {
 		if (obj.isDirectory || !canDownload) return;
+		// 聚合盘：Worker 顺序拼接各桶分片，直接下载
+		if (obj.pool && obj.fileId) {
+			window.location.href = `/api/pool/${obj.fileId}?download=1`;
+			return;
+		}
 		const trigger = (href: string, fallbackName?: string) => {
 			const link = document.createElement("a");
 			link.href = href;
@@ -925,6 +979,14 @@ function FileBrowser({
 	const copySignedLink = async (obj: S3Object) => {
 		if (obj.isDirectory) return;
 		try {
+			// 聚合盘：直接复制下载端点（公开目录访客也可用）
+			if (obj.pool && obj.fileId) {
+				await navigator.clipboard.writeText(
+					`${window.location.origin}/api/pool/${obj.fileId}?download=1`
+				);
+				window.alert("下载链接已复制到剪贴板");
+				return;
+			}
 			const res = await fetch(
 				apiFileUrl(storage.id, obj.key, { action: "signed-url" })
 			);
@@ -948,6 +1010,19 @@ function FileBrowser({
 				? `确定删除文件夹「${obj.name}」及其全部内容？此操作不可恢复。`
 				: `确定删除「${obj.name}」？此操作不可恢复。`,
 			onConfirm: async () => {
+				// 聚合盘：删各桶分片 + 清单
+				if (obj.pool && obj.fileId) {
+					const res = await fetch(`/api/pool/${obj.fileId}`, {
+						method: "DELETE",
+					});
+					if (!res.ok) {
+						const data = (await res.json().catch(() => ({}))) as { error?: string };
+						window.alert(data.error || "删除失败");
+						return;
+					}
+					loadFiles();
+					return;
+				}
 				const res = await fetch(
 					apiFileUrl(storage.id, obj.key, isDir ? { action: "rmdir" } : {}),
 					{ method: "DELETE" }
@@ -970,6 +1045,24 @@ function FileBrowser({
 			confirmText: "重命名",
 			onSubmit: async (newName) => {
 				if (newName === obj.name) return;
+				// 聚合盘：只改 D1 清单，零数据搬移
+				if (obj.pool && obj.fileId) {
+					const res = await fetch(
+						`/api/pool/${obj.fileId}?action=rename`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ name: newName }),
+						}
+					);
+					if (!res.ok) {
+						const data = (await res.json().catch(() => ({}))) as { error?: string };
+						window.alert(data.error || "重命名失败");
+						return;
+					}
+					loadFiles();
+					return;
+				}
 				const res = await fetch(
 					apiFileUrl(storage.id, obj.key, { action: "rename" }),
 					{
@@ -1036,6 +1129,19 @@ function FileBrowser({
 			message: `确定删除 ${files.length} 个文件和 ${folders.length} 个文件夹（含其中所有内容）？此操作不可恢复。`,
 			onConfirm: async () => {
 				let failed = 0;
+				// 聚合盘文件走各自删除端点（每桶一次批量请求，服务端处理）
+				const poolFiles = files.filter((f) => f.pool && f.fileId);
+				for (const pf of poolFiles) {
+					try {
+						const res = await fetch(`/api/pool/${pf.fileId}`, {
+							method: "DELETE",
+						});
+						if (!res.ok) failed++;
+					} catch {
+						failed++;
+					}
+				}
+				const normalFiles = files.filter((f) => !(f.pool && f.fileId));
 				for (const folder of folders) {
 					try {
 						const res = await fetch(
@@ -1047,7 +1153,7 @@ function FileBrowser({
 						failed++;
 					}
 				}
-				if (files.length > 0) {
+				if (normalFiles.length > 0) {
 					// 文件走批量删除端点：一次请求删全部（S3 单请求可删 1000 个 key）
 					try {
 						const res = await fetch(
@@ -1056,13 +1162,13 @@ function FileBrowser({
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: JSON.stringify({
-									paths: files.map((f) => f.key),
+									paths: normalFiles.map((f) => f.key),
 								}),
 							}
 						);
-						if (!res.ok) failed += files.length;
+						if (!res.ok) failed += normalFiles.length;
 					} catch {
-						failed += files.length;
+						failed += normalFiles.length;
 					}
 				}
 				if (failed > 0) {
@@ -1335,6 +1441,7 @@ function FileBrowser({
 							className="btn-ghost !px-2"
 							title="离线下载（从 URL 转存）"
 							onClick={() => setShowOffline(true)}
+							hidden={folderMode === "pool"}
 						>
 							<LinkIcon className="h-4 w-4" />
 						</button>
@@ -1343,12 +1450,13 @@ function FileBrowser({
 							className="btn-ghost !px-2"
 							title="新建文件夹"
 							onClick={createFolder}
+							hidden={folderMode === "pool"}
 						>
 							<FolderPlusIcon className="h-4 w-4" />
 						</button>
 					</>
 				)}
-				{canUpload && (
+				{canUpload && folderMode === "normal" && (
 					<button
 						type="button"
 						className="btn-outline !px-2 !text-xs"
@@ -2027,6 +2135,15 @@ function FolderTreeItem({
 		onChanged();
 	};
 
+	const toggleGuestUpload = async () => {
+		await fetch("/api/folders", {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ id: node.id, guestUpload: !node.guestUpload }),
+		});
+		onChanged();
+	};
+
 	const removeFolder = async () => {
 		if (
 			!window.confirm(
@@ -2078,8 +2195,21 @@ function FolderTreeItem({
 				>
 					<FolderIcon className="h-4 w-4 shrink-0 text-blue-500" />
 					<span className="min-w-0 flex-1 truncate">{node.name}</span>
+					{node.mode === "pool" && (
+						<span
+							className="shrink-0 rounded bg-indigo-100 px-1 text-[10px] font-medium text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-300"
+							title="聚合盘：大文件自动切片分布到多个桶"
+						>
+							📦
+						</span>
+					)}
 					{node.isPublic && (
 						<GlobeIcon className="h-3 w-3 shrink-0 text-emerald-500" />
+					)}
+					{node.isPublic && node.guestUpload && (
+						<UploadIcon
+							className="h-3 w-3 shrink-0 text-amber-500"
+						/>
 					)}
 				</button>
 				{isAdmin && (
@@ -2092,6 +2222,24 @@ function FolderTreeItem({
 						>
 							<GlobeIcon className="h-3.5 w-3.5" />
 						</button>
+						{node.isPublic && (
+							<button
+								type="button"
+								className={`rounded p-1 hover:bg-zinc-200 dark:hover:bg-zinc-700 ${
+									node.guestUpload
+										? "text-amber-500"
+										: "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+								}`}
+								title={
+									node.guestUpload
+										? "关闭访客上传（访客仍可浏览/下载）"
+										: "允许访客上传（传输盘模式：不登录可传可删）"
+								}
+								onClick={toggleGuestUpload}
+							>
+								<UploadIcon className="h-3.5 w-3.5" />
+							</button>
+						)}
 						<button
 							type="button"
 							className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
@@ -2170,6 +2318,19 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 	useEffect(() => {
 		migrateLegacyUploads(chunkSizeMB);
 	}, [chunkSizeMB]);
+
+	// 守盘小猫：有上传任务时切换台词
+	const [uploadBusy, setUploadBusy] = useState(false);
+	useEffect(() => {
+		return uploadManager.subscribe(() => {
+			const tasks = uploadManager.getSnapshot();
+			setUploadBusy(
+				tasks.some(
+					(t) => t.status === "uploading" || t.status === "queued"
+				)
+			);
+		});
+	}, []);
 
 	// 展平目录树（查当前目录 / 校验 target 有效性）
 	const allFolderNodes = useMemo(() => {
@@ -2489,6 +2650,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 								upload: false,
 							}
 						}
+						folderMode={currentFolder?.mode === "pool" ? "pool" : "normal"}
 						storageOptions={uploadableStorages}
 						onFoldersChanged={refreshStorages}
 					/>
@@ -2523,6 +2685,12 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			<UploadTaskPanel />
 
 			{/* 登录弹窗 */}
+			{/* 首次访问欢迎 */}
+			<WelcomeDialog siteTitle={siteTitle} announcement={siteAnnouncement} />
+
+			{/* 守盘小猫：上传时说加油 */}
+			<SitePet busy={uploadBusy} />
+
 			{showLogin && (
 				<LoginDialog
 					onSuccess={refreshStorages}

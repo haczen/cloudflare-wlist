@@ -409,6 +409,20 @@ export async function initDatabase(db: D1Database): Promise<void> {
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (storage_id) REFERENCES storages(id) ON DELETE SET NULL
     )`,
+		// 聚合盘：大文件切片分布到多个桶，清单存 D1
+		`CREATE TABLE IF NOT EXISTS pool_files (
+      id TEXT PRIMARY KEY,
+      folder_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0,
+      chunk_size INTEGER NOT NULL DEFAULT 0,
+      content_type TEXT DEFAULT 'application/octet-stream',
+      status TEXT NOT NULL DEFAULT 'uploading',
+      chunks TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
+    )`,
+		`CREATE INDEX IF NOT EXISTS idx_pool_files_folder ON pool_files(folder_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_storages_is_public ON storages(is_public)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(share_token)`,
@@ -454,6 +468,29 @@ export async function initDatabase(db: D1Database): Promise<void> {
 		await db
 			.prepare("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
 			.run();
+	}
+
+	// 迁移：folders 增加 聚合盘模式 mode / 访客上传 guest_upload / 池成员 pool_members
+	const folderCols = await db
+		.prepare("PRAGMA table_info(folders)")
+		.all<{ name: string }>();
+	const folderNames = new Set((folderCols.results ?? []).map((c) => c.name));
+	if (folderNames.size > 0) {
+		if (!folderNames.has("mode")) {
+			await db
+				.prepare("ALTER TABLE folders ADD COLUMN mode TEXT DEFAULT 'normal'")
+				.run();
+		}
+		if (!folderNames.has("guest_upload")) {
+			await db
+				.prepare("ALTER TABLE folders ADD COLUMN guest_upload INTEGER DEFAULT 0")
+				.run();
+		}
+		if (!folderNames.has("pool_members")) {
+			await db
+				.prepare("ALTER TABLE folders ADD COLUMN pool_members TEXT")
+				.run();
+		}
 	}
 
 	schemaInitialized = true;

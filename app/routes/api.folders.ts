@@ -12,6 +12,7 @@ import {
 } from "~/lib/folders";
 import { createClient, withClientState } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
+import { deletePoolFilesByFolder, groupChunksByStorage } from "~/lib/pool";
 
 /** 递归列出目录下全部对象 key（含子目录占位），用于删除 */
 async function listAllKeys(
@@ -65,11 +66,14 @@ export async function action({ request, context }: Route.ActionArgs) {
 
 	// 新建目录：管理员任意建；普通用户可在自己有上传权限的目录下建子目录
 	if (method === "POST") {
-		const { name, parentId, storageId, isPublic } = body as {
+		const { name, parentId, storageId, isPublic, mode, guestUpload, poolMembers } = body as {
 			name?: string;
 			parentId?: number | null;
 			storageId?: number;
 			isPublic?: boolean;
+			mode?: "normal" | "pool";
+			guestUpload?: boolean;
+			poolMembers?: number[];
 		};
 		if (!name || !name.trim()) {
 			return Response.json({ error: "目录名必填" }, { status: 400 });
@@ -138,12 +142,22 @@ export async function action({ request, context }: Route.ActionArgs) {
 		try {
 			// 公开性只能由管理员设置：否则任何有上传权限的用户都能把子目录公开给全世界
 			const effectiveIsPublic = isAdmin ? !!isPublic : false;
+			// 访客上传 / 聚合盘模式同样仅管理员可配
+			const effectiveGuestUpload = isAdmin ? !!guestUpload : false;
+			const effectiveMode = isAdmin && mode === "pool" ? "pool" : "normal";
+			const effectiveMembers =
+				isAdmin && effectiveMode === "pool" && Array.isArray(poolMembers)
+					? poolMembers.filter((v) => typeof v === "number")
+					: [];
 			const folder = await createFolderRecord(db, {
 				name: name.trim(),
 				parentId: parentId || null,
 				storageId: targetStorageId,
 				storagePath,
 				isPublic: effectiveIsPublic,
+				mode: effectiveMode,
+				guestUpload: effectiveGuestUpload,
+				poolMembers: effectiveMembers,
 			});
 			await logAudit(db, {
 				action: "folder.create",
@@ -152,7 +166,12 @@ export async function action({ request, context }: Route.ActionArgs) {
 				userAgent: meta.userAgent,
 				storageId: targetStorageId,
 				path: storagePath,
-				detail: { folderId: folder.id, isPublic: effectiveIsPublic },
+				detail: {
+					folderId: folder.id,
+					isPublic: effectiveIsPublic,
+					mode: effectiveMode,
+					guestUpload: effectiveGuestUpload,
+				},
 			});
 			return Response.json({ folder });
 		} catch (err) {
@@ -164,20 +183,29 @@ export async function action({ request, context }: Route.ActionArgs) {
 		}
 	}
 
-	// 更新（公开开关）
+	// 更新（公开开关 / 访客上传开关 / 聚合成员）
 	if (method === "PUT") {
 		if (!isAdmin) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
-		const { id, isPublic } = body as { id?: number; isPublic?: boolean };
-		if (!id || isPublic === undefined) {
-			return Response.json({ error: "id 与 isPublic 必填" }, { status: 400 });
+		const { id, isPublic, guestUpload, poolMembers } = body as {
+			id?: number;
+			isPublic?: boolean;
+			guestUpload?: boolean;
+			poolMembers?: number[];
+		};
+		if (!id || (isPublic === undefined && guestUpload === undefined && poolMembers === undefined)) {
+			return Response.json({ error: "id 与要更新的字段必填" }, { status: 400 });
 		}
 		const existing = await getFolderById(db, id);
 		if (!existing) {
 			return Response.json({ error: "目录不存在" }, { status: 404 });
 		}
-		const folder = await updateFolderRecord(db, id, { isPublic });
+		const folder = await updateFolderRecord(db, id, {
+			...(isPublic !== undefined ? { isPublic } : {}),
+			...(guestUpload !== undefined ? { guestUpload } : {}),
+			...(poolMembers !== undefined ? { poolMembers } : {}),
+		});
 		await logAudit(db, {
 			action: "folder.update",
 			userType: "admin",
@@ -185,7 +213,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 			userAgent: meta.userAgent,
 			storageId: existing.storageId,
 			path: existing.storagePath,
-			detail: { folderId: id, isPublic },
+			detail: { folderId: id, isPublic, guestUpload },
 		});
 		return Response.json({ folder });
 	}
@@ -206,6 +234,47 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!folder) {
 			return Response.json({ error: "目录不存在" }, { status: 404 });
 		}
+
+		// 聚合盘：先删各桶上的分片对象，再清 D1 清单
+		if (folder.mode === "pool") {
+			try {
+				const poolFiles = await deletePoolFilesByFolder(db, id);
+				const byStorage = new Map<number, string[]>();
+				for (const pf of poolFiles) {
+					for (const [sid, keys] of groupChunksByStorage(pf.chunks)) {
+						const list = byStorage.get(sid) || [];
+						list.push(...keys);
+						byStorage.set(sid, list);
+					}
+				}
+				for (const [sid, keys] of byStorage) {
+					const poolStorage = await getStorageById(db, sid);
+					if (!poolStorage) continue;
+					const poolClient = createClient(poolStorage);
+					const batch = poolClient as unknown as {
+						deleteObjects?: (keys: string[]) => Promise<number>;
+					};
+					try {
+						if (typeof batch.deleteObjects === "function") {
+							await withClientState(poolClient, db, sid, () =>
+								batch.deleteObjects!(keys)
+							);
+						} else {
+							for (const key of keys) {
+								await withClientState(poolClient, db, sid, () =>
+									poolClient.deleteObject(key)
+								);
+							}
+						}
+					} catch {
+						// 尽力删
+					}
+				}
+			} catch {
+				// 清单清理失败不阻断目录删除
+			}
+		}
+
 		const storage = await getStorageById(db, folder.storageId);
 		if (storage) {
 			try {

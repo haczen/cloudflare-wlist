@@ -37,7 +37,7 @@ export interface UploadTask {
   uploadPath: string; // dirPath + 文件名
   contentType: string;
   chunkSize: number;
-  mode: "single" | "multipart";
+  mode: "single" | "multipart" | "pool";
   status: UploadTaskStatus;
   progress: number;   // 0-100
   loaded: number;     // 已上传字节
@@ -60,9 +60,20 @@ export interface EnqueueOptions {
   path: string;
   chunkSize: number;
   multipartSupported: boolean;
+  /** 聚合盘：传入后走跨桶分片通道 */
+  pool?: { folderId: number };
 }
 
 export type ResumeResult = "started" | "need-file" | "denied" | "mismatch" | "missing";
+
+/** 聚合盘分片计划（服务端 init 下发） */
+interface PoolChunk {
+  i: number;
+  storageId: number;
+  key: string;
+  size: number;
+  start: number;
+}
 
 interface InternalTask {
   meta: UploadTask;
@@ -77,6 +88,12 @@ interface InternalTask {
   uploadId?: string;
   completedParts?: UploadTaskPart[];
   useDirectUpload?: boolean;
+  // 聚合盘状态
+  poolFolderId?: number;
+  poolFileId?: string;
+  poolChunks?: PoolChunk[];
+  poolDone?: number;      // 已完成分片的累计字节
+  poolChunkIdx?: number;  // 已完成到第几个分片
 }
 
 interface PersistedTask {
@@ -88,7 +105,7 @@ interface PersistedTask {
   uploadPath: string;
   contentType: string;
   chunkSize: number;
-  mode: "single" | "multipart";
+  mode: "single" | "multipart" | "pool";
   status: string;
   uploadId?: string;
   completedParts?: UploadTaskPart[];
@@ -97,6 +114,11 @@ interface PersistedTask {
   addedAt: number;
   finishedAt?: number;
   error?: string;
+  poolFolderId?: number;
+  poolFileId?: string;
+  poolChunks?: PoolChunk[];
+  poolDone?: number;
+  poolChunkIdx?: number;
 }
 
 interface PersistedStore {
@@ -331,8 +353,14 @@ class UploadManager {
 
   private reviveTask(pt: PersistedTask): InternalTask | null {
     if (!pt.id || !pt.uploadPath || !pt.size || !pt.chunkSize) return null;
-    const totalParts = pt.mode === "multipart" ? Math.ceil(pt.size / pt.chunkSize) : 1;
-    const loaded = this.completedBytes(pt);
+    const totalParts =
+      pt.mode === "pool"
+        ? pt.poolChunks?.length ?? 0
+        : pt.mode === "multipart"
+          ? Math.ceil(pt.size / pt.chunkSize)
+          : 1;
+    const loaded =
+      pt.mode === "pool" ? pt.poolDone ?? 0 : this.completedBytes(pt);
     return {
       meta: {
         id: pt.id,
@@ -348,7 +376,7 @@ class UploadManager {
         progress: pt.status === "done" ? 100 : Math.min(99, Math.round((loaded / pt.size) * 100)),
         loaded,
         speed: 0,
-        currentPart: pt.completedParts?.length ?? 0,
+        currentPart: pt.mode === "pool" ? pt.poolChunkIdx ?? 0 : pt.completedParts?.length ?? 0,
         totalParts,
         error: pt.error,
         addedAt: pt.addedAt,
@@ -364,6 +392,11 @@ class UploadManager {
       uploadId: pt.uploadId,
       completedParts: pt.completedParts,
       useDirectUpload: pt.useDirectUpload ?? true,
+      poolFolderId: pt.poolFolderId,
+      poolFileId: pt.poolFileId,
+      poolChunks: pt.poolChunks,
+      poolDone: pt.poolDone,
+      poolChunkIdx: pt.poolChunkIdx,
     };
   }
 
@@ -471,6 +504,11 @@ class UploadManager {
       addedAt: m.addedAt,
       finishedAt: m.finishedAt,
       error: m.error,
+      poolFolderId: t.poolFolderId,
+      poolFileId: t.poolFileId,
+      poolChunks: t.poolChunks,
+      poolDone: t.poolDone,
+      poolChunkIdx: t.poolChunkIdx,
     };
   }
 
@@ -521,8 +559,12 @@ class UploadManager {
       }
       if (dup) continue;
 
-      const mode: "single" | "multipart" = opts.multipartSupported && file.size >= opts.chunkSize ? "multipart" : "single";
-      const totalParts = mode === "multipart" ? Math.ceil(file.size / opts.chunkSize) : 1;
+      const mode: "single" | "multipart" | "pool" = opts.pool
+        ? "pool"
+        : opts.multipartSupported && file.size >= opts.chunkSize
+          ? "multipart"
+          : "single";
+      const totalParts = mode === "single" ? 1 : mode === "pool" ? 0 : Math.ceil(file.size / opts.chunkSize);
       const id = `u${Date.now().toString(36)}${(this.idCounter++).toString(36)}`;
 
       this.tasks.set(id, {
@@ -537,6 +579,7 @@ class UploadManager {
         file, handle: entry.handle ?? null,
         xhrs: new Set(), partProgress: {}, samples: [], ctrl: { paused: false, canceled: false },
         useDirectUpload: true,
+        ...(opts.pool ? { poolFolderId: opts.pool.folderId } : {}),
       });
       if (entry.handle) void idbPutHandle(id, entry.handle);
       added++;
@@ -718,7 +761,8 @@ class UploadManager {
   private async runTask(t: InternalTask): Promise<void> {
     const m = t.meta;
     try {
-      if (m.mode === "multipart") await this.runMultipart(t);
+      if (m.mode === "pool") await this.runPool(t);
+      else if (m.mode === "multipart") await this.runMultipart(t);
       else await this.runSingle(t);
       m.status = "done";
       m.progress = 100;
@@ -736,6 +780,116 @@ class UploadManager {
       m.error = err instanceof Error ? err.message : String(err);
       m.speed = 0;
       this.persistNow(); this.notify();
+    }
+  }
+
+  // ===== 聚合盘上传：跨桶轮询分片，逐片直传（失败回退代理） =====
+  private async runPool(t: InternalTask): Promise<void> {
+    const m = t.meta;
+
+    // 1) 服务端规划分片分布（chunk i → 池成员[i mod N]）
+    if (!t.poolFileId) {
+      const res = await fetch("/api/pool?action=init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          folderId: t.poolFolderId,
+          name: m.name,
+          size: m.size,
+          contentType: m.contentType,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || "聚合盘初始化失败");
+      }
+      const data = (await res.json()) as {
+        file: { id: string; chunkSize: number; chunks: PoolChunk[] };
+      };
+      t.poolFileId = data.file.id;
+      t.poolChunks = data.file.chunks;
+      t.poolDone = 0;
+      t.poolChunkIdx = 0;
+      m.chunkSize = data.file.chunkSize;
+      m.totalParts = data.file.chunks.length;
+      this.persistNow();
+    }
+    t.poolChunks ??= [];
+    t.poolDone ??= 0;
+    t.poolChunkIdx ??= 0;
+
+    const updateProgress = (loaded: number) => {
+      m.loaded = Math.min(loaded, m.size);
+      m.progress = m.size > 0 ? Math.min(99, Math.round((m.loaded / m.size) * 100)) : 100;
+      this.pushSample(t, m.loaded);
+      this.notify();
+    };
+    updateProgress(t.poolDone);
+
+    // 2) 逐片上传：优先签名直传（B2/R2 直连），CORS 失败回退 Worker 代理流式 PUT
+    const chunks = t.poolChunks;
+    let chunkIdx: number = t.poolChunkIdx;
+    while (chunkIdx < chunks.length) {
+      this.ensureActive(t);
+      const idx: number = chunkIdx;
+      const chunk = chunks[idx];
+      const blob = t.file!.slice(chunk.start, chunk.start + chunk.size);
+
+      let lastErr: unknown;
+      let done = false;
+      for (let attempt = 0; attempt <= PART_RETRIES && !done; attempt++) {
+        this.ensureActive(t);
+        try {
+          // 直传
+          let putUrl: string | null = null;
+          try {
+            const res = await fetch(`/api/pool?action=chunk-url`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: t.poolFileId, index: chunk.i }),
+            });
+            if (res.ok) {
+              putUrl = ((await res.json()) as { url?: string | null }).url ?? null;
+            }
+          } catch { /* 走代理 */ }
+
+          const target =
+            putUrl ??
+            `${apiFileUrl(chunk.storageId, chunk.key)}`;
+          await uploadXhr(target, blob, t.xhrs, (loaded) => {
+            updateProgress(t.poolDone! + loaded);
+          });
+          done = true;
+        } catch (err) {
+          if (this.unloading || t.ctrl.canceled || t.ctrl.paused) throw err;
+          lastErr = err;
+          if (attempt < PART_RETRIES) {
+            m.error = `分片 ${idx + 1}/${chunks.length} 上传失败，第 ${attempt + 1}/${PART_RETRIES} 次重试…`;
+            this.notify();
+            await this.interruptibleSleep(t, Math.min(1000 * 2 ** attempt, 30_000));
+          }
+        }
+      }
+      if (!done) throw lastErr ?? new Error("聚合盘分片上传失败");
+
+      chunkIdx = idx + 1;
+      t.poolChunkIdx = chunkIdx;
+      t.poolDone = (t.poolDone ?? 0) + chunk.size;
+      m.currentPart = chunkIdx;
+      if (m.error?.includes("重试")) m.error = undefined;
+      updateProgress(t.poolDone);
+      this.persist();
+    }
+
+    // 3) 全部完成 → 标记 ready（服务端把清单置为可下载状态）
+    const completeRes = await fetch(`/api/pool?action=complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId: t.poolFileId }),
+    });
+    if (!completeRes.ok) {
+      const data = await completeRes.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || "聚合盘完成标记失败");
     }
   }
 

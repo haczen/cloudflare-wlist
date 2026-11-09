@@ -9,6 +9,12 @@ export interface Folder {
 	/** 桶内完整路径（不含首尾斜杠，"" = 桶根） */
 	storagePath: string;
 	isPublic: boolean;
+	/** normal = 普通目录；pool = 聚合盘（大文件跨桶分片） */
+	mode: "normal" | "pool";
+	/** 公开目录是否允许访客（未登录）上传 */
+	guestUpload: boolean;
+	/** 聚合盘成员桶 ID；空 = 全部 S3 桶自动平均分配 */
+	poolMembers: number[];
 	createdAt: string;
 }
 
@@ -19,10 +25,24 @@ interface FolderRow {
 	storage_id: number;
 	storage_path: string | null;
 	is_public: number;
+	mode?: string | null;
+	guest_upload?: number | null;
+	pool_members?: string | null;
 	created_at: string;
 }
 
 function rowToFolder(row: FolderRow): Folder {
+	let poolMembers: number[] = [];
+	if (row.pool_members) {
+		try {
+			const parsed = JSON.parse(row.pool_members);
+			if (Array.isArray(parsed)) {
+				poolMembers = parsed.filter((v) => typeof v === "number");
+			}
+		} catch {
+			/* 忽略损坏的 JSON */
+		}
+	}
 	return {
 		id: row.id,
 		name: row.name,
@@ -30,6 +50,9 @@ function rowToFolder(row: FolderRow): Folder {
 		storageId: row.storage_id,
 		storagePath: (row.storage_path || "").replace(/^\/+|\/+$/g, ""),
 		isPublic: row.is_public === 1,
+		mode: row.mode === "pool" ? "pool" : "normal",
+		guestUpload: row.guest_upload === 1,
+		poolMembers,
 		createdAt: row.created_at,
 	};
 }
@@ -58,6 +81,9 @@ export interface CreateFolderInput {
 	storageId: number;
 	storagePath: string;
 	isPublic: boolean;
+	mode?: "normal" | "pool";
+	guestUpload?: boolean;
+	poolMembers?: number[];
 }
 
 export async function createFolderRecord(
@@ -81,17 +107,21 @@ export async function createFolderRecord(
 		throw new Error("同级已存在同名目录");
 	}
 	const storagePath = (input.storagePath || "").replace(/^\/+|\/+$/g, "");
+	const mode = input.mode === "pool" ? "pool" : "normal";
 	const row = await db
 		.prepare(
-			`INSERT INTO folders (name, parent_id, storage_id, storage_path, is_public)
-			 VALUES (?, ?, ?, ?, ?) RETURNING *`
+			`INSERT INTO folders (name, parent_id, storage_id, storage_path, is_public, mode, guest_upload, pool_members)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
 		)
 		.bind(
 			name,
 			input.parentId,
 			input.storageId,
 			storagePath,
-			input.isPublic ? 1 : 0
+			input.isPublic ? 1 : 0,
+			mode,
+			input.guestUpload ? 1 : 0,
+			JSON.stringify(input.poolMembers || [])
 		)
 		.first<FolderRow>();
 	if (!row) throw new Error("创建目录记录失败");
@@ -101,7 +131,7 @@ export async function createFolderRecord(
 export async function updateFolderRecord(
 	db: D1Database,
 	id: number,
-	input: Partial<Pick<Folder, "name" | "isPublic">>
+	input: Partial<Pick<Folder, "name" | "isPublic" | "guestUpload" | "poolMembers">>
 ): Promise<Folder | null> {
 	const updates: string[] = [];
 	const values: (string | number)[] = [];
@@ -112,6 +142,14 @@ export async function updateFolderRecord(
 	if (input.isPublic !== undefined) {
 		updates.push("is_public = ?");
 		values.push(input.isPublic ? 1 : 0);
+	}
+	if (input.guestUpload !== undefined) {
+		updates.push("guest_upload = ?");
+		values.push(input.guestUpload ? 1 : 0);
+	}
+	if (input.poolMembers !== undefined) {
+		updates.push("pool_members = ?");
+		values.push(JSON.stringify(input.poolMembers));
 	}
 	if (updates.length === 0) return getFolderById(db, id);
 	values.push(id);
@@ -288,7 +326,10 @@ export function computeFolderAccess(
 	return {
 		list: best.folder.isPublic || !!best.perm?.canList,
 		download: best.folder.isPublic || !!best.perm?.canDownload,
-		upload: !!best.perm?.canUpload,
+		// 访客上传：目录公开且显式开启 guest_upload（传输盘场景：任何人不登录可传可下）
+		upload:
+			!!best.perm?.canUpload ||
+			(best.folder.isPublic && best.folder.guestUpload),
 		via: best.perm ? "assigned" : "public",
 	};
 }

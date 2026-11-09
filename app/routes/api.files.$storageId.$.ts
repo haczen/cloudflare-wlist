@@ -120,11 +120,14 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 				token = result.nextContinuationToken;
 				truncated = true;
 			}
+			// 隐藏聚合盘内部对象（.wlistpool/ 前缀），普通浏览只呈现用户文件
+			const isPoolInternal = (key: string) =>
+				key.includes("/.wlistpool/") || key.startsWith(".wlistpool/");
 			return Response.json({
 				storage: { id: storage.id, name: storage.name },
 				path,
-				objects: allObjects,
-				prefixes: allPrefixes,
+				objects: allObjects.filter((o) => !isPoolInternal(o.key)),
+				prefixes: allPrefixes.filter((p) => !isPoolInternal(p)),
 				isTruncated: truncated,
 			});
 		} catch (error) {
@@ -951,6 +954,38 @@ export async function action({
 			request.headers.get("content-type") || "application/octet-stream";
 
 		try {
+			const contentLength = parseInt(
+				request.headers.get("content-length") || "0",
+				10
+			);
+
+			// 大分片流式转发（聚合盘 chunk 的代理回退通道）：
+			// arrayBuffer 会撑爆 Worker 128MB 内存，FixedLengthStream 保证 S3 需要的 Content-Length
+			if (contentLength > 32 * 1024 * 1024 && request.body) {
+				const fls = new FixedLengthStream(contentLength);
+				void request.body.pipeTo(fls.writable);
+				await withClientState(client, db, storageId, () =>
+					// 流式 body 仅 S3 客户端支持（聚合盘分片回退通道），联合类型收窄为窄签名
+					(client as unknown as {
+						putObject: (
+							path: string,
+							body: ReadableStream<Uint8Array>,
+							contentType?: string
+						) => Promise<void>;
+					}).putObject(path, fls.readable, contentType)
+				);
+				await logAudit(db, {
+					action: "file.upload",
+					userType,
+					ip: meta.ip,
+					userAgent: meta.userAgent,
+					storageId,
+					path,
+					detail: { size: contentLength, contentType, streamed: true },
+				});
+				return Response.json({ success: true, path });
+			}
+
 			const bodyBuffer = await request.arrayBuffer();
 			if (bodyBuffer.byteLength === 0) {
 				return Response.json({ error: "No file body provided" }, { status: 400 });

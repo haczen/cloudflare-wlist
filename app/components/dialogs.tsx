@@ -1126,6 +1126,11 @@ export function NewFolderDialog({
 		storageOptions[0]?.id || 0
 	);
 	const [isPublic, setIsPublic] = useState(false);
+	const [mode, setMode] = useState<"normal" | "pool">("normal");
+	const [poolMembers, setPoolMembers] = useState<number[]>(
+		storageOptions.map((s) => s.id)
+	);
+	const [guestUpload, setGuestUpload] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -1140,6 +1145,10 @@ export function NewFolderDialog({
 			setError("只有管理员可以创建顶层目录");
 			return;
 		}
+		if (isAdmin && mode === "pool" && poolMembers.length === 0) {
+			setError("聚合盘至少选择一个桶");
+			return;
+		}
 		setCreating(true);
 		setError(null);
 		try {
@@ -1149,8 +1158,12 @@ export function NewFolderDialog({
 				body: JSON.stringify({
 					name,
 					parentId: currentFolderId,
-					storageId: isSub ? undefined : targetStorageId,
+					storageId: isSub ? undefined : mode === "pool" ? poolMembers[0] : targetStorageId,
 					isPublic,
+					...(isAdmin && mode === "pool"
+						? { mode: "pool" as const, poolMembers }
+						: {}),
+					...(isAdmin ? { guestUpload } : {}),
 				}),
 			});
 			const data = (await response.json().catch(() => ({}))) as {
@@ -1199,19 +1212,89 @@ export function NewFolderDialog({
 						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
 							存放在哪个桶（用户看不到桶，只看到目录）
 						</label>
-						<select
-							className="input"
-							value={targetStorageId}
-							onChange={(event) =>
-								setTargetStorageId(Number(event.target.value))
-							}
-						>
+						{isAdmin && mode === "pool" ? (
+							<p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300">
+								📦 聚合盘：大文件自动切片轮询分布到下方成员桶，容量与流量
+								由多桶共同承担
+							</p>
+						) : (
+							<select
+								className="input"
+								value={targetStorageId}
+								onChange={(event) =>
+									setTargetStorageId(Number(event.target.value))
+								}
+							>
+								{storageOptions.map((option) => (
+									<option key={option.id} value={option.id}>
+										{option.name}
+									</option>
+								))}
+							</select>
+						)}
+					</div>
+				)}
+				{isAdmin && (
+					<div>
+						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+							目录类型
+						</label>
+						<div className="grid grid-cols-2 gap-2">
+							<button
+								type="button"
+								className={`rounded-lg border px-3 py-2 text-xs transition ${
+									mode === "normal"
+										? "border-blue-600 bg-blue-50 font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+										: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
+								}`}
+								onClick={() => setMode("normal")}
+							>
+								🗂️ 普通目录
+							</button>
+							<button
+								type="button"
+								className={`rounded-lg border px-3 py-2 text-xs transition ${
+									mode === "pool"
+										? "border-indigo-600 bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+										: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
+								}`}
+								onClick={() => setMode("pool")}
+							>
+								📦 聚合盘（跨桶分布）
+							</button>
+						</div>
+					</div>
+				)}
+				{isAdmin && mode === "pool" && (
+					<div>
+						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+							成员桶（不选 = 全部桶自动平均分配）
+						</label>
+						<div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
 							{storageOptions.map((option) => (
-								<option key={option.id} value={option.id}>
+								<label
+									key={option.id}
+									className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300"
+								>
+									<input
+										type="checkbox"
+										className="h-4 w-4 accent-indigo-600"
+										checked={poolMembers.includes(option.id)}
+										onChange={(event) =>
+											setPoolMembers((prev) =>
+												event.target.checked
+													? [...prev, option.id]
+													: prev.filter((id) => id !== option.id)
+											)
+										}
+									/>
 									{option.name}
-								</option>
+								</label>
 							))}
-						</select>
+						</div>
+						<p className="mt-1 text-[11px] text-zinc-400">
+							已选 {poolMembers.length} / {storageOptions.length} 个桶
+						</p>
 					</div>
 				)}
 				<div>
@@ -1235,6 +1318,17 @@ export function NewFolderDialog({
 							onChange={(event) => setIsPublic(event.target.checked)}
 						/>
 						公开给所有人（访客无需登录即可浏览）
+					</label>
+				)}
+				{isAdmin && isPublic && (
+					<label className="ml-6 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+						<input
+							type="checkbox"
+							className="h-4 w-4 accent-emerald-600"
+							checked={guestUpload}
+							onChange={(event) => setGuestUpload(event.target.checked)}
+						/>
+						允许访客上传（传输盘模式：不登录也能传 / 下 / 删）
 					</label>
 				)}
 				{error && (

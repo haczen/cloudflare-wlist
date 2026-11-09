@@ -10,6 +10,8 @@ export default [
 	route("api/me", "routes/api.me.ts"),
 	route("api/users", "routes/api.users.ts"),
 	route("api/folders", "routes/api.folders.ts"),
+	route("api/pool", "routes/api.pool.ts"),
+	route("api/pool/:fileId", "routes/api.pool.$fileId.ts"),
 	route("api/auth/github", "routes/api.auth.github.ts"),
 	route("api/auth/github/callback", "routes/api.auth.github.callback.ts"),
 	route("share", "routes/share.tsx"),

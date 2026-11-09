@@ -502,6 +502,57 @@ export class S3Client {
 		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
+	async getSignedPutUrl(
+		key: string,
+		expiresIn: number = 3600
+	): Promise<string> {
+		const fullKey = this.getFullPath(key);
+		const path = this.getObjectPath(fullKey);
+		const encodedPath = encodeS3Path(path);
+		const host = this.getHost();
+
+		const now = new Date();
+		const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+		const dateStamp = amzDate.slice(0, 8);
+		const credentialScope = `${dateStamp}/${this.config.region}/s3/aws4_request`;
+
+		const queryParams: Record<string, string> = {
+			"X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+			"X-Amz-Credential": `${this.config.accessKeyId}/${credentialScope}`,
+			"X-Amz-Date": amzDate,
+			"X-Amz-Expires": expiresIn.toString(),
+			"X-Amz-SignedHeaders": "host",
+		};
+
+		const canonicalQueryString = buildCanonicalQueryString(queryParams);
+
+		const canonicalRequest = [
+			"PUT",
+			encodedPath,
+			canonicalQueryString,
+			`host:${host}\n`,
+			"host",
+			"UNSIGNED-PAYLOAD",
+		].join("\n");
+
+		const stringToSign = [
+			"AWS4-HMAC-SHA256",
+			amzDate,
+			credentialScope,
+			await sha256(canonicalRequest),
+		].join("\n");
+
+		const signingKey = await getSignatureKey(
+			this.config.secretAccessKey,
+			dateStamp,
+			this.config.region,
+			"s3"
+		);
+		const signature = toHex(await hmacSha256(signingKey, stringToSign));
+
+		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+	}
+
 	async getSignedUploadPartUrl(
 		key: string,
 		uploadId: string,
@@ -557,11 +608,15 @@ export class S3Client {
 		return `${this.getBaseUrl()}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 	}
 
-	async putObject(key: string, body: ArrayBuffer | string, contentType?: string): Promise<void> {
+	async putObject(
+		key: string,
+		body: ArrayBuffer | string | ReadableStream<Uint8Array>,
+		contentType?: string
+	): Promise<void> {
 		const fullKey = this.getFullPath(key);
 		const path = this.getObjectPath(fullKey);
 
-		let bodyData: ArrayBuffer;
+		let bodyData: ArrayBuffer | ReadableStream<Uint8Array>;
 		if (typeof body === "string") {
 			bodyData = new TextEncoder().encode(body).buffer as ArrayBuffer;
 		} else {
