@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import {
 	CloseIcon,
@@ -216,7 +217,12 @@ function MarkdownPreview({ url }: { url: string }) {
 				const text = await response.text();
 				const rendered = await marked.parse(text);
 				if (!cancelled) {
-					setHtml(typeof rendered === "string" ? rendered : "");
+					// marked 不净化原始 HTML：桶里任何来源的文件内容都可能携带脚本
+					setHtml(
+						typeof rendered === "string"
+							? DOMPurify.sanitize(rendered)
+							: ""
+					);
 				}
 			} catch (err) {
 				if (!cancelled) {

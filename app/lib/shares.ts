@@ -209,6 +209,7 @@ export async function deleteShare(db: D1Database, id: string): Promise<void> {
 }
 
 export async function cleanExpiredShares(db: D1Database): Promise<void> {
-	const query = `DELETE FROM shares WHERE expires_at IS NOT NULL AND expires_at < datetime('now')`;
+	// expires_at 为 ISO 格式（含 T），须用同格式 now 比较，否则过期当天清理不生效
+	const query = `DELETE FROM shares WHERE expires_at IS NOT NULL AND expires_at < strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
 	await db.prepare(query).run();
 }

@@ -195,8 +195,16 @@ export async function getVisibleFolders(
 ): Promise<Folder[]> {
 	const all = await getAllFolders(db);
 	if (user?.role === "admin") return all;
-	// 访客无授权集合；登录用户带上授权集合，统一走「公开 ∪ 授权 + 子树展开 + 祖先补链」
 	const assigned = user ? await getUserFolders(db, user.id) : [];
+	return computeVisibleFolders(all, assigned);
+}
+
+/** 纯函数版可见性计算（数据由调用方一次取齐，避免 N+1 查询） */
+export function computeVisibleFolders(
+	all: Folder[],
+	assigned: UserFolderPerm[]
+): Folder[] {
+	// 访客无授权集合；登录用户带上授权集合，统一走「公开 ∪ 授权 + 子树展开 + 祖先补链」
 	const assignedIds = new Set(assigned.map((p) => p.folderId));
 	// 公开目录或被授权目录（子目录跟随父目录可见）
 	const visible = new Set<number>();
@@ -244,11 +252,19 @@ export async function resolveFolderAccess(
 	if (user?.role === "admin") {
 		return { list: true, download: true, upload: true, via: "assigned" };
 	}
-	const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
 	const all = await getAllFolders(db);
-	const assigned = user
-		? await getUserFolders(db, user.id)
-		: [];
+	const assigned = user ? await getUserFolders(db, user.id) : [];
+	return computeFolderAccess(all, assigned, storageId, path);
+}
+
+/** 纯函数版权限解析（数据由调用方一次取齐，避免 N+1 查询） */
+export function computeFolderAccess(
+	all: Folder[],
+	assigned: UserFolderPerm[],
+	storageId: number,
+	path: string
+): { list: boolean; download: boolean; upload: boolean; via: "public" | "assigned" | "none" } {
+	const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
 	const assignedMap = new Map(assigned.map((p) => [p.folderId, p]));
 
 	// 候选：同桶下，路径等于目录路径或在其之下

@@ -100,13 +100,32 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 	// 列目录
 	if (action === "list" || (!action && !isInlineImageRequest)) {
 		try {
-			const result = await withClientState(client, db, storageId, () =>
-				client.listObjects(path)
-			);
+			// S3 单次最多返回 1000 条：持续跟进 ContinuationToken 合并完整列表。
+			// 上限 10 页（1 万条）防失控；超出部分以 isTruncated 告知
+			const MAX_LIST_PAGES = 10;
+			const allObjects: Awaited<ReturnType<typeof client.listObjects>>["objects"] = [];
+			const allPrefixes: string[] = [];
+			let token: string | undefined;
+			let truncated = false;
+			for (let page = 0; page < MAX_LIST_PAGES; page++) {
+				const result = await withClientState(client, db, storageId, () =>
+					client.listObjects(path, "/", 1000, token)
+				);
+				allObjects.push(...result.objects);
+				allPrefixes.push(...result.prefixes);
+				if (!result.nextContinuationToken) {
+					truncated = false;
+					break;
+				}
+				token = result.nextContinuationToken;
+				truncated = true;
+			}
 			return Response.json({
 				storage: { id: storage.id, name: storage.name },
 				path,
-				...result,
+				objects: allObjects,
+				prefixes: allPrefixes,
+				isTruncated: truncated,
 			});
 		} catch (error) {
 			return Response.json(
@@ -145,11 +164,21 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 				detail: { fileName, contentLength, contentType },
 			});
 
+			// SVG 是可含脚本的 XML：同源 inline 提供等于把任意 JS 送进本站会话。
+			// CSP sandbox 让直接导航时脚本不执行、沦为独立沙箱源；<img> 嵌入展示不受影响
+			const isSvg = contentType.includes("svg") || fileName.toLowerCase().endsWith(".svg");
+
 			return new Response(response.body, {
 				headers: {
 					"Content-Type": contentType,
 					"Content-Disposition": `inline; filename="${encodeURIComponent(fileName)}"`,
 					...(contentLength ? { "Content-Length": contentLength } : {}),
+					...(isSvg
+						? {
+								"Content-Security-Policy": "sandbox",
+								"X-Content-Type-Options": "nosniff",
+							}
+						: {}),
 				},
 			});
 		} catch (error) {

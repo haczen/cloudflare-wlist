@@ -843,6 +843,17 @@ export class S3Client {
 			const text = await response.text();
 			throw new Error(`S3 CompleteMultipartUpload failed: ${response.status} ${text}`);
 		}
+
+		// S3 的坑：CompleteMultipartUpload 可能返回 HTTP 200 但 body 是 <Error>（如 InvalidPart）
+		// 只看状态码会把失败当成功 → 文件实际没合并，前端却报告上传完成
+		const respBody = await response.text();
+		if (respBody.includes("<Error>")) {
+			const code = respBody.match(/<Code>(.*?)<\/Code>/)?.[1] || "Unknown";
+			const message = respBody.match(/<Message>(.*?)<\/Message>/)?.[1] || "";
+			throw new Error(
+				`S3 CompleteMultipartUpload 失败: ${code}${message ? ` ${message}` : ""}`
+			);
+		}
 	}
 
 	async abortMultipartUpload(key: string, uploadId: string): Promise<void> {

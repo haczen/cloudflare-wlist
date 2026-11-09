@@ -2,12 +2,15 @@ import type { Route } from "./+types/home";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRevalidator } from "react-router";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { requireAuth } from "~/lib/auth";
 import { getAllStorages, initDatabase } from "~/lib/storage";
 import {
-	getVisibleFolders,
+	getAllFolders,
+	getUserFolders,
 	buildFolderTree,
-	resolveFolderAccess,
+	computeVisibleFolders,
+	computeFolderAccess,
 	type Folder,
 } from "~/lib/folders";
 import {
@@ -24,6 +27,9 @@ export interface FolderNode extends Folder {
 	children: FolderNode[];
 	access: { list: boolean; download: boolean; upload: boolean };
 }
+
+/** 浏览/移动组件实际用到的桶信息（非管理员的 loader 不下发连接配置） */
+type BrowserStorage = Pick<StorageInfo, "id" | "name" | "type">;
 
 function enrichFolderTree(
 	nodes: ReturnType<typeof buildFolderTree>,
@@ -207,21 +213,31 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	const githubEnabled = !!context.cloudflare.env.GITHUB_CLIENT_ID;
 	const identity = user ? { id: user.id, role: user.role } : null;
 
+	// 目录与授权一次取齐，内存计算可见性与权限（逐目录查库是 2N 次 D1 往返）
+	const allFolders = await getAllFolders(db);
+	const assignedPerms = identity
+		? await getUserFolders(db, identity.id)
+		: [];
+
 	// 虚拟目录树：管理员全部；用户/访客 = 公开 ∪ 被授权（含子树与祖先链）
-	const folders = await getVisibleFolders(db, identity);
+	const folders = isAdmin
+		? allFolders
+		: computeVisibleFolders(allFolders, assignedPerms);
 
 	// 每个目录对当前身份的实际权限
 	const accessMap = new Map<
 		number,
 		{ list: boolean; download: boolean; upload: boolean }
 	>();
-	for (const folder of folders) {
-		if (isAdmin) {
+	if (isAdmin) {
+		for (const folder of folders) {
 			accessMap.set(folder.id, { list: true, download: true, upload: true });
-		} else {
-			const access = await resolveFolderAccess(
-				db,
-				identity,
+		}
+	} else {
+		for (const folder of folders) {
+			const access = computeFolderAccess(
+				allFolders,
+				assignedPerms,
 				folder.storageId,
 				folder.storagePath
 			);
@@ -233,10 +249,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		}
 	}
 
-	// 桶列表：管理员可见（存储后端原始入口）；普通身份用于权限计算
-	const storages = isAdmin
-		? await getAllStorages(db)
-		: await getAllStorages(db);
+	const storages = await getAllStorages(db);
 
 	return {
 		isAdmin,
@@ -257,26 +270,33 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		chunkSizeMB,
 		webdavEnabled,
 		folders: enrichFolderTree(buildFolderTree(folders), accessMap),
-		storages: storages.map((s) => ({
-			id: s.id,
-			name: s.name,
-			type: s.type,
-			endpoint: s.endpoint,
-			region: s.region,
-			accessKeyId: s.accessKeyId,
-			bucket: s.bucket,
-			basePath: s.basePath,
-			// 扩展配置（refresh_token 等）只给管理员
-			config: isAdmin ? s.config : undefined,
-			isPublic: s.isPublic,
-			guestList: s.guestList,
-			guestDownload: s.guestDownload,
-			guestUpload: s.guestUpload,
-			// 桶级权限（管理员全通）
-			access: isAdmin
-				? { list: true, download: true, upload: true }
-				: { list: false, download: false, upload: false },
-		})),
+		// 桶连接信息（endpoint/AK/桶名等）只给管理员；
+		// 其余身份只拿到 UI 所需的 {id, name, type}（loaderData 会随 SSR HTML 下发）
+		storages: storages.map((s) =>
+			isAdmin
+				? {
+						id: s.id,
+						name: s.name,
+						type: s.type,
+						endpoint: s.endpoint,
+						region: s.region,
+						accessKeyId: s.accessKeyId,
+						bucket: s.bucket,
+						basePath: s.basePath,
+						config: s.config,
+						isPublic: s.isPublic,
+						guestList: s.guestList,
+						guestDownload: s.guestDownload,
+						guestUpload: s.guestUpload,
+						access: { list: true, download: true, upload: true },
+					}
+				: {
+						id: s.id,
+						name: s.name,
+						type: s.type,
+						access: { list: false, download: false, upload: false },
+					}
+		),
 	};
 }
 
@@ -379,7 +399,7 @@ function MoveDialog({
 	onMoved,
 	onClose,
 }: {
-	storage: StorageInfo;
+	storage: BrowserStorage;
 	obj: S3Object;
 	onMoved: () => void;
 	onClose: () => void;
@@ -523,7 +543,7 @@ function FileBrowser({
 	storageOptions,
 	onFoldersChanged,
 }: {
-	storage: StorageInfo;
+	storage: BrowserStorage;
 	isAdmin: boolean;
 	chunkSizeMB: number;
 	/** 侧边栏进入时的起始路径 */
@@ -560,8 +580,27 @@ function FileBrowser({
 	const [deepResults, setDeepResults] = useState<S3Object[] | null>(null);
 	const [deepLoading, setDeepLoading] = useState(false);
 	const [viewMode, setViewMode] = useState<"list" | "grid">("list");
-	const [sortKey, setSortKey] = useState<"name" | "size" | "lastModified">("name");
-	const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+	// 排序：默认按修改时间倒序（传输盘找刚传的文件），选择持久化到 localStorage
+	const [sortKey, setSortKey] = useState<"name" | "size" | "lastModified">(
+		() =>
+			(["name", "size", "lastModified"] as const).includes(
+				localStorage.getItem("wlist-sort-key") as "name" | "size" | "lastModified"
+			)
+				? (localStorage.getItem("wlist-sort-key") as "name" | "size" | "lastModified")
+				: "lastModified"
+	);
+	const [sortDir, setSortDir] = useState<"asc" | "desc">(
+		() =>
+			localStorage.getItem("wlist-sort-dir") === "asc" ? "asc" : "desc"
+	);
+	useEffect(() => {
+		try {
+			localStorage.setItem("wlist-sort-key", sortKey);
+			localStorage.setItem("wlist-sort-dir", sortDir);
+		} catch {
+			/* 隐私模式等场景忽略 */
+		}
+	}, [sortKey, sortDir]);
 	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 	const [cursor, setCursor] = useState(-1);
 	const [contextMenu, setContextMenu] = useState<{
@@ -609,7 +648,11 @@ function FileBrowser({
 		setReadme(null);
 	}, [storage.id, initialPath]);
 
+	// 列表请求序号：快速切换目录时丢弃过期响应（A 的慢响应不得覆盖 B 的列表）
+	const listSeqRef = useRef(0);
+
 	const loadFiles = useCallback(async () => {
+		const seq = ++listSeqRef.current;
 		if (!canList) {
 			setLoading(false);
 			return;
@@ -618,19 +661,25 @@ function FileBrowser({
 		setError("");
 		try {
 			const res = await fetch(apiFileUrl(storage.id, path, { action: "list" }));
+			if (seq !== listSeqRef.current) return;
 			if (res.ok) {
 				const data = (await res.json()) as { objects?: S3Object[] };
+				if (seq !== listSeqRef.current) return;
 				setObjects(data.objects || []);
 			} else {
 				const data = (await res.json()) as { error?: string };
+				if (seq !== listSeqRef.current) return;
 				setObjects([]);
 				setError(data.error || "加载失败");
 			}
 		} catch {
+			if (seq !== listSeqRef.current) return;
 			setObjects([]);
 			setError("网络错误");
 		} finally {
-			setLoading(false);
+			if (seq === listSeqRef.current) {
+				setLoading(false);
+			}
 		}
 	}, [storage.id, path, canList]);
 
@@ -661,7 +710,10 @@ function FileBrowser({
 				const text = await res.text();
 				const html = await marked.parse(text);
 				if (!cancelled) {
-					setReadme(typeof html === "string" ? html : null);
+					// marked 输出可能携带桶内文件自带的原始 HTML/脚本，注入前必须净化
+					setReadme(
+						typeof html === "string" ? DOMPurify.sanitize(html) : null
+					);
 				}
 			} catch {
 				// README 拉取失败静默忽略
@@ -2481,7 +2533,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			{/* 管理面板 */}
 			{showAdmin && isAdmin && user && (
 				<AdminPanel
-					storages={storages}
+					// 管理员分支下 loader 总是返回全量桶字段（非管理员已被裁剪）
+					storages={storages as StorageInfo[]}
 					webdavEnabled={webdavEnabled}
 					currentUserId={user.id}
 					onStoragesChanged={refreshStorages}

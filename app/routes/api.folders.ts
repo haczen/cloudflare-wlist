@@ -136,12 +136,14 @@ export async function action({ request, context }: Route.ActionArgs) {
 		}
 
 		try {
+			// 公开性只能由管理员设置：否则任何有上传权限的用户都能把子目录公开给全世界
+			const effectiveIsPublic = isAdmin ? !!isPublic : false;
 			const folder = await createFolderRecord(db, {
 				name: name.trim(),
 				parentId: parentId || null,
 				storageId: targetStorageId,
 				storagePath,
-				isPublic: !!isPublic,
+				isPublic: effectiveIsPublic,
 			});
 			await logAudit(db, {
 				action: "folder.create",
@@ -150,7 +152,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 				userAgent: meta.userAgent,
 				storageId: targetStorageId,
 				path: storagePath,
-				detail: { folderId: folder.id, isPublic: !!isPublic },
+				detail: { folderId: folder.id, isPublic: effectiveIsPublic },
 			});
 			return Response.json({ folder });
 		} catch (err) {

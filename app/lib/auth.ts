@@ -43,7 +43,9 @@ export async function getSession(
 ): Promise<Session | null> {
 	const row = await db
 		.prepare(
-			"SELECT * FROM sessions WHERE id = ? AND expires_at > datetime('now')"
+			// expires_at 以 ISO 格式（含 T）存储；datetime('now') 生成空格分隔格式，
+			// 字典序比较时 'T' > ' '，会导致过期会话在当天一直有效 —— 用同格式 now 比较
+			"SELECT * FROM sessions WHERE id = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 		)
 		.bind(sessionId)
 		.first<{ id: string; user_id: number | null; expires_at: string }>();
@@ -79,7 +81,9 @@ export async function deleteSession(
 
 export async function cleanExpiredSessions(db: D1Database): Promise<void> {
 	await db
-		.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+		.prepare(
+			"DELETE FROM sessions WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+		)
 		.run();
 }
 
