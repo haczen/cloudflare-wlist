@@ -1552,7 +1552,7 @@ function FileBrowser({
 
 			{/* 文件区 */}
 			<div
-				className="relative min-h-0 flex-1 overflow-auto"
+				className="relative min-h-0 flex-1 overflow-auto bg-zinc-50/60 dark:bg-zinc-950/40"
 				onDragOver={(event) => {
 					if (!canUpload) return;
 					event.preventDefault();
@@ -1602,13 +1602,24 @@ function FileBrowser({
 						<SearchIcon className="h-8 w-8 text-zinc-400" />
 						输入关键词后点击「搜索」，将递归查找子目录</div>
 				) : visibleObjects.length === 0 ? (
-					<div className="flex flex-col items-center justify-center gap-2 p-14 text-center text-sm text-zinc-500">
-						<CloudIcon className="h-8 w-8 text-zinc-400" />
-						{searchQuery.trim()
-							? "没有匹配的文件"
-							: deepSearch
-								? "深度搜索无结果"
-								: "此目录为空"}
+					<div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
+						<div className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-zinc-100 to-zinc-200 text-3xl shadow-inner dark:from-zinc-800 dark:to-zinc-900">
+							{searchQuery.trim() || deepSearch ? "🔍" : "📂"}
+						</div>
+						<p className="text-sm text-zinc-500">
+							{searchQuery.trim()
+								? "没有匹配的文件"
+								: deepSearch
+									? "深度搜索无结果"
+									: "此目录为空"}
+						</p>
+						{canUpload && !searchQuery.trim() && !deepSearch && (
+							<p className="text-xs text-zinc-400">
+								{folderMode === "pool"
+									? "把文件拖到这里，自动分片存入多个网盘"
+									: "把文件拖到这里，或 Ctrl+V 粘贴上传"}
+							</p>
+						)}
 					</div>
 				) : viewMode === "list" ? (
 					<table className="w-full border-collapse text-sm">
@@ -2143,6 +2154,7 @@ function FolderTreeItem({
 	selectedFolderId,
 	onSelect,
 	isAdmin,
+	storageLabel,
 	onChanged,
 }: {
 	node: FolderNode;
@@ -2150,6 +2162,8 @@ function FolderTreeItem({
 	selectedFolderId: number | null;
 	onSelect: (node: FolderNode) => void;
 	isAdmin: boolean;
+	/** 所属盘名（或聚合盘的桶数说明），显示在目录名下方 */
+	storageLabel: string;
 	onChanged: () => void;
 }) {
 	const [open, setOpen] = useState(false);
@@ -2218,28 +2232,27 @@ function FolderTreeItem({
 				)}
 				<button
 					type="button"
-					className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left text-sm"
+					className="flex min-w-0 flex-1 flex-col items-start gap-0.5 py-1 text-left"
 					onClick={() => onSelect(node)}
-					title={node.name}
+					title={`${node.name} · ${storageLabel}`}
 				>
-					<FolderIcon className="h-4 w-4 shrink-0 text-blue-500" />
-					<span className="min-w-0 flex-1 truncate">{node.name}</span>
-					{node.mode === "pool" && (
-						<span
-							className="shrink-0 rounded bg-indigo-100 px-1 text-[10px] font-medium text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-300"
-							title="聚合盘：大文件自动切片分布到多个桶"
-						>
-							📦
-						</span>
-					)}
-					{node.isPublic && (
-						<GlobeIcon className="h-3 w-3 shrink-0 text-emerald-500" />
-					)}
-					{node.isPublic && node.guestUpload && (
-						<UploadIcon
-							className="h-3 w-3 shrink-0 text-amber-500"
-						/>
-					)}
+					<span className="flex w-full min-w-0 items-center gap-1.5">
+						<FolderIcon className="h-4 w-4 shrink-0 text-blue-500" />
+						<span className="min-w-0 flex-1 truncate text-sm">{node.name}</span>
+						{node.isPublic && (
+							<GlobeIcon className="h-3 w-3 shrink-0 text-emerald-500" />
+						)}
+						{node.isPublic && node.guestUpload && (
+							<UploadIcon
+								className="h-3 w-3 shrink-0 text-amber-500"
+							/>
+						)}
+					</span>
+					{/* 所属盘 / 聚合范围 */}
+					<span className="flex w-full min-w-0 items-center gap-1 pl-[22px] text-[10px] leading-none text-zinc-400 dark:text-zinc-500">
+						{node.mode === "pool" && <span aria-hidden>📦</span>}
+						<span className="min-w-0 truncate">{storageLabel}</span>
+					</span>
 				</button>
 				{isAdmin && (
 					<span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -2289,6 +2302,7 @@ function FolderTreeItem({
 						selectedFolderId={selectedFolderId}
 						onSelect={onSelect}
 						isAdmin={isAdmin}
+						storageLabel={storageLabel}
 						onChanged={onChanged}
 					/>
 				))}
@@ -2434,22 +2448,34 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 	return (
 		<div className="flex h-dvh flex-col overflow-hidden md:flex-row">
 			{/* 侧边栏 */}
-			<aside className="flex shrink-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 md:w-60 md:border-b-0 md:border-r">
+			<aside className="flex shrink-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 md:w-64 md:border-b-0 md:border-r">
 				{/* 品牌区 */}
-				<div className="flex items-center gap-2 px-4 py-3.5">
-					<CloudIcon className="h-5 w-5 text-blue-600" />
-					<h1 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
-						{siteTitle}
-					</h1>
-					{isAdmin && (
-						<span className="badge bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
-							管理员
+				<div className="border-b border-zinc-100 bg-gradient-to-br from-blue-50 via-indigo-50 to-violet-50 px-4 py-3.5 dark:border-zinc-800 dark:from-zinc-900 dark:via-indigo-950/40 dark:to-violet-950/30">
+					<div className="flex items-center gap-2.5">
+						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-violet-500 text-white shadow-sm">
+							<CloudIcon className="h-4.5 w-4.5" />
 						</span>
-					)}
+						<div className="min-w-0 flex-1">
+							<h1 className="truncate bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-base font-bold text-transparent dark:from-blue-400 dark:to-violet-400">
+								{siteTitle}
+							</h1>
+							<p className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">
+								多盘聚合 · 直链中转
+							</p>
+						</div>
+						{isAdmin && (
+							<span className="badge shrink-0 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+								管理员
+							</span>
+						)}
+					</div>
 				</div>
 
 				{/* 目录树（主内容）+ 管理员的存储后端 */}
 				<nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-2">
+					<p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+						目录
+					</p>
 					{folders.length === 0 && (
 						<p className="px-2 py-6 text-center text-xs leading-relaxed text-zinc-500">
 							{isAdmin
@@ -2473,6 +2499,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 								})
 							}
 							isAdmin={isAdmin}
+							storageLabel={
+								node.mode === "pool"
+									? node.poolMembers.length > 0
+										? `聚合盘 · 轮询 ${node.poolMembers.length} 个桶`
+										: "聚合盘 · 全部桶平均分配"
+									: storages.find((s) => s.id === node.storageId)
+											?.name || `存储 #${node.storageId}`
+							}
 							onChanged={refreshStorages}
 						/>
 					))}
