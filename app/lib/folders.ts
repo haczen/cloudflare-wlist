@@ -305,13 +305,20 @@ export function computeFolderAccess(
 	const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
 	const assignedMap = new Map(assigned.map((p) => [p.folderId, p]));
 
-	// 候选：同桶下，路径等于目录路径或在其之下
+	// 候选：同桶下，路径等于目录路径或在其之下；
+	// 聚合盘例外——分片轮询落在任何成员桶里的 <目录>/.wlistpool/ 子树，
+	// 同样由该目录把关（否则分片到非锚定桶会被权限判定拒绝）
 	let best: { folder: Folder; perm: UserFolderPerm | null } | null = null;
 	for (const f of all) {
-		if (f.storageId !== storageId) continue;
 		const fp = f.storagePath;
-		const covers =
-			fp === "" ? true : cleanPath === fp || cleanPath.startsWith(fp + "/");
+		let covers = false;
+		if (f.storageId === storageId) {
+			covers = fp === "" ? true : cleanPath === fp || cleanPath.startsWith(fp + "/");
+		} else if (f.mode === "pool" && fp !== "") {
+			covers =
+				cleanPath.startsWith(fp + "/.wlistpool/") &&
+				(f.poolMembers.length === 0 || f.poolMembers.includes(storageId));
+		}
 		if (!covers) continue;
 		const perm = assignedMap.get(f.id) || null;
 		if (f.isPublic || perm) {
