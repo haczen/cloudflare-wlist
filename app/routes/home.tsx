@@ -133,6 +133,7 @@ import {
 } from "~/components/admin-panel";
 import {
 	ConfirmDialog,
+	EditFolderDialog,
 	LoginDialog,
 	NewFolderDialog,
 	OfflineDownloadDialog,
@@ -142,6 +143,7 @@ import {
 	StatsDialog,
 	TextEditorDialog,
 	type CurrentUser,
+	type EditableFolder,
 	type StorageOption,
 } from "~/components/dialogs";
 import {
@@ -2155,6 +2157,7 @@ function FolderTreeItem({
 	onSelect,
 	isAdmin,
 	storageLabel,
+	onEdit,
 	onChanged,
 }: {
 	node: FolderNode;
@@ -2164,6 +2167,8 @@ function FolderTreeItem({
 	isAdmin: boolean;
 	/** 所属盘名（或聚合盘的桶数说明），显示在目录名下方 */
 	storageLabel: string;
+	/** 管理员编辑目录（改名 / 公开 / 访客上传 / 成员桶） */
+	onEdit: (node: FolderNode) => void;
 	onChanged: () => void;
 }) {
 	const [open, setOpen] = useState(false);
@@ -2284,6 +2289,14 @@ function FolderTreeItem({
 						)}
 						<button
 							type="button"
+							className="rounded p-1 text-zinc-400 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950/40"
+							title="编辑目录（改名 / 公开 / 访客上传 / 成员桶）"
+							onClick={() => onEdit(node)}
+						>
+							<RenameIcon className="h-3.5 w-3.5" />
+						</button>
+						<button
+							type="button"
 							className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
 							title="删除目录（含桶内文件）"
 							onClick={removeFolder}
@@ -2303,6 +2316,7 @@ function FolderTreeItem({
 						onSelect={onSelect}
 						isAdmin={isAdmin}
 						storageLabel={storageLabel}
+						onEdit={onEdit}
 						onChanged={onChanged}
 					/>
 				))}
@@ -2339,6 +2353,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 	const [editingStorage, setEditingStorage] = useState<StorageInfo | null>(null);
 	const [showAddStorage, setShowAddStorage] = useState(false);
 	const [statsStorage, setStatsStorage] = useState<StorageInfo | null>(null);
+	/** 正在编辑的目录（盘）：改名 / 公开 / 访客上传 / 成员桶 */
+	const [editingFolder, setEditingFolder] = useState<EditableFolder | null>(null);
 
 	// GitHub 登录失败提示（回调带回的 ?github_error=）
 	const [githubError, setGithubError] = useState("");
@@ -2506,6 +2522,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 										: "聚合盘 · 全部桶平均分配"
 									: storages.find((s) => s.id === node.storageId)
 											?.name || `存储 #${node.storageId}`
+							}
+							onEdit={(n) =>
+								setEditingFolder({
+									id: n.id,
+									name: n.name,
+									isPublic: n.isPublic,
+									guestUpload: n.guestUpload,
+									mode: n.mode,
+									poolMembers: n.poolMembers,
+								})
 							}
 							onChanged={refreshStorages}
 						/>
@@ -2750,6 +2776,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			{/* 登录弹窗 */}
 			{/* 首次访问欢迎 */}
 			<WelcomeDialog siteTitle={siteTitle} announcement={siteAnnouncement} />
+
+			{/* 编辑目录（盘） */}
+			{editingFolder && (
+				<EditFolderDialog
+					folder={editingFolder}
+					storageOptions={storages.map((s) => ({ id: s.id, name: s.name }))}
+					onUpdated={refreshStorages}
+					onClose={() => setEditingFolder(null)}
+				/>
+			)}
 
 			{/* 守盘小猫：上传时说加油 */}
 			<SitePet busy={uploadBusy} />

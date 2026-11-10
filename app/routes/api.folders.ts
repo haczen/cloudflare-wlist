@@ -183,25 +183,54 @@ export async function action({ request, context }: Route.ActionArgs) {
 		}
 	}
 
-	// 更新（公开开关 / 访客上传开关 / 聚合成员）
+	// 更新（改名 / 公开开关 / 访客上传开关 / 聚合成员）
 	if (method === "PUT") {
 		if (!isAdmin) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
-		const { id, isPublic, guestUpload, poolMembers } = body as {
+		const { id, name, isPublic, guestUpload, poolMembers } = body as {
 			id?: number;
+			name?: string;
 			isPublic?: boolean;
 			guestUpload?: boolean;
 			poolMembers?: number[];
 		};
-		if (!id || (isPublic === undefined && guestUpload === undefined && poolMembers === undefined)) {
+		if (
+			!id ||
+			(name === undefined &&
+				isPublic === undefined &&
+				guestUpload === undefined &&
+				poolMembers === undefined)
+		) {
 			return Response.json({ error: "id 与要更新的字段必填" }, { status: 400 });
 		}
 		const existing = await getFolderById(db, id);
 		if (!existing) {
 			return Response.json({ error: "目录不存在" }, { status: 404 });
 		}
+
+		// 改名：仅改显示名，不动 storagePath（桶内文件零搬移）
+		let cleanName: string | undefined;
+		if (name !== undefined) {
+			cleanName = String(name).trim();
+			if (!cleanName || cleanName.includes("/")) {
+				return Response.json({ error: "目录名不合法" }, { status: 400 });
+			}
+			if (cleanName !== existing.name) {
+				const dup = await db
+					.prepare(
+						"SELECT id FROM folders WHERE parent_id IS ? AND name = ? AND id != ?"
+					)
+					.bind(existing.parentId, cleanName, id)
+					.first();
+				if (dup) {
+					return Response.json({ error: "同级已存在同名目录" }, { status: 400 });
+				}
+			}
+		}
+
 		const folder = await updateFolderRecord(db, id, {
+			...(cleanName !== undefined ? { name: cleanName } : {}),
 			...(isPublic !== undefined ? { isPublic } : {}),
 			...(guestUpload !== undefined ? { guestUpload } : {}),
 			...(poolMembers !== undefined ? { poolMembers } : {}),
@@ -213,7 +242,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 			userAgent: meta.userAgent,
 			storageId: existing.storageId,
 			path: existing.storagePath,
-			detail: { folderId: id, isPublic, guestUpload },
+			detail: { folderId: id, name: cleanName, isPublic, guestUpload },
 		});
 		return Response.json({ folder });
 	}
