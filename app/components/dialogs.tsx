@@ -1126,12 +1126,11 @@ export function NewFolderDialog({
 		storageOptions[0]?.id || 0
 	);
 	const [isPublic, setIsPublic] = useState(false);
-	// 默认聚合盘：新建不用挑桶，自动平均分布到全部桶
-	const [mode, setMode] = useState<"normal" | "pool">("pool");
+	// 存储方式三选一：平分全部盘（默认）/ 指定几个盘平分 / 只存到一个盘
+	const [mode, setMode] = useState<"all" | "some" | "single">("all");
 	const [poolMembers, setPoolMembers] = useState<number[]>(
 		storageOptions.map((s) => s.id)
 	);
-	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [guestUpload, setGuestUpload] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -1147,28 +1146,33 @@ export function NewFolderDialog({
 			setError("只有管理员可以创建顶层目录");
 			return;
 		}
-		if (isAdmin && mode === "pool" && poolMembers.length === 0) {
-			setError("聚合盘至少需要一个桶（留默认全部即可）");
+		if (isAdmin && mode === "some" && poolMembers.length === 0) {
+			setError("至少勾选一个盘");
 			return;
 		}
 		setCreating(true);
 		setError(null);
 		try {
+			const isPool = isAdmin && (mode === "all" || mode === "some");
 			const response = await fetch("/api/folders", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					name,
 					parentId: currentFolderId,
-					// 聚合盘随便锚定一个成员桶（仅作目录树归属）；普通目录才真正选桶
+					// 聚合盘锚定第一个成员桶（仅目录树归属）；普通目录才真正选桶
 					storageId: isSub
 						? undefined
-						: mode === "pool"
+						: isPool
 							? poolMembers[0] || storageOptions[0]?.id
 							: targetStorageId,
 					isPublic,
-					...(isAdmin && mode === "pool"
-						? { mode: "pool" as const, poolMembers }
+					...(isPool
+						? {
+								mode: "pool" as const,
+								// 不指定成员 = 服务端平分到全部桶（以后新增的桶也自动参与）
+								poolMembers: mode === "some" ? poolMembers : [],
+							}
 						: {}),
 					...(isAdmin ? { guestUpload } : {}),
 				}),
@@ -1214,10 +1218,97 @@ export function NewFolderDialog({
 				className="space-y-3"
 				onSubmit={handleSubmit}
 			>
-				{!isSub && isAdmin && mode === "normal" && (
+				{isAdmin && (
 					<div>
 						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-							存放在哪个桶（用户看不到桶，只看到目录）
+							存储方式
+						</label>
+						<div className="space-y-1.5">
+							{(
+								[
+									{
+										key: "all",
+										icon: "📦",
+										title: `平分到全部盘（${storageOptions.length} 个）`,
+										desc: "文件自动切片轮询，每个盘各担一份",
+									},
+									{
+										key: "some",
+										icon: "🧩",
+										title: "指定几个盘平分",
+										desc: "只分布到勾选的成员盘",
+									},
+									{
+										key: "single",
+										icon: "🗂️",
+										title: "只存到一个盘",
+										desc: "普通目录，所有文件进同一个桶",
+									},
+								] as const
+							).map((opt) => (
+								<button
+									key={opt.key}
+									type="button"
+									className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition ${
+										mode === opt.key
+											? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40"
+											: "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+									}`}
+									onClick={() => setMode(opt.key)}
+								>
+									<span className="mt-0.5 text-base">{opt.icon}</span>
+									<span className="min-w-0 flex-1">
+										<span
+											className={`block text-sm ${
+												mode === opt.key
+													? "font-medium text-indigo-700 dark:text-indigo-300"
+													: "text-zinc-700 dark:text-zinc-300"
+											}`}
+										>
+											{opt.title}
+										</span>
+										<span className="block text-[11px] text-zinc-400">
+											{opt.desc}
+										</span>
+									</span>
+								</button>
+							))}
+						</div>
+					</div>
+				)}
+				{isAdmin && mode === "some" && (
+					<div>
+						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+							成员盘（已选 {poolMembers.length} / {storageOptions.length}）
+						</label>
+						<div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
+							{storageOptions.map((option) => (
+								<label
+									key={option.id}
+									className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300"
+								>
+									<input
+										type="checkbox"
+										className="h-4 w-4 accent-indigo-600"
+										checked={poolMembers.includes(option.id)}
+										onChange={(event) =>
+											setPoolMembers((prev) =>
+												event.target.checked
+													? [...prev, option.id]
+													: prev.filter((id) => id !== option.id)
+											)
+										}
+									/>
+									{option.name}
+								</label>
+							))}
+						</div>
+					</div>
+				)}
+				{!isSub && isAdmin && mode === "single" && (
+					<div>
+						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+							存到哪个盘
 						</label>
 						<select
 							className="input"
@@ -1232,78 +1323,6 @@ export function NewFolderDialog({
 								</option>
 							))}
 						</select>
-					</div>
-				)}
-				{isAdmin && mode === "pool" && (
-					<p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300">
-						📦 聚合盘：文件自动切片平分到 {poolMembers.length}{" "}
-						个桶，无需选择存储位置
-					</p>
-				)}
-				{isAdmin && (
-					<div>
-						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-							目录类型
-						</label>
-						<div className="grid grid-cols-2 gap-2">
-							<button
-								type="button"
-								className={`rounded-lg border px-3 py-2 text-xs transition ${
-									mode === "pool"
-										? "border-indigo-600 bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
-										: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
-								}`}
-								onClick={() => setMode("pool")}
-							>
-								📦 聚合盘（默认）
-							</button>
-							<button
-								type="button"
-								className={`rounded-lg border px-3 py-2 text-xs transition ${
-									mode === "normal"
-										? "border-blue-600 bg-blue-50 font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
-										: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
-								}`}
-								onClick={() => setMode("normal")}
-							>
-								🗂️ 普通目录（单桶）
-							</button>
-						</div>
-					</div>
-				)}
-				{isAdmin && mode === "pool" && (
-					<div>
-						<button
-							type="button"
-							className="text-[11px] text-zinc-400 underline-offset-2 hover:text-zinc-600 hover:underline dark:hover:text-zinc-300"
-							onClick={() => setShowAdvanced((v) => !v)}
-						>
-							{showAdvanced ? "收起" : "高级：指定成员桶（默认全部桶平分）"}
-						</button>
-						{showAdvanced && (
-							<div className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
-								{storageOptions.map((option) => (
-									<label
-										key={option.id}
-										className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300"
-									>
-										<input
-											type="checkbox"
-											className="h-4 w-4 accent-indigo-600"
-											checked={poolMembers.includes(option.id)}
-											onChange={(event) =>
-												setPoolMembers((prev) =>
-													event.target.checked
-														? [...prev, option.id]
-														: prev.filter((id) => id !== option.id)
-												)
-											}
-										/>
-										{option.name}
-									</label>
-								))}
-							</div>
-						)}
 					</div>
 				)}
 				<div>

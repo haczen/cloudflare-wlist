@@ -16,6 +16,7 @@ import {
 	getPoolFile,
 	resolvePoolMembers,
 	cleanExpiredPoolFiles,
+	groupChunksByStorage,
 } from "~/lib/pool";
 import { createClient } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
@@ -59,7 +60,27 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	}
 
 	const files = await listPoolFiles(db, folderId);
-	return Response.json({ files });
+	// 附带每个文件的分片分布（哪些桶、各几片）——下载回源与 UI 展示共用这份清单
+	const storages = await getAllStorages(db);
+	const nameById = new Map(storages.map((s) => [s.id, s.name]));
+	return Response.json({
+		files: files.map((f) => {
+			const buckets = [...groupChunksByStorage(f.chunks)]
+				.map(([sid, keys]) => ({
+					name: nameById.get(sid) ?? `存储#${sid}`,
+					count: keys.length,
+				}))
+				.sort((a, b) => b.count - a.count);
+			return {
+				id: f.id,
+				name: f.name,
+				size: f.size,
+				chunks: f.chunks.length,
+				createdAt: f.createdAt,
+				buckets,
+			};
+		}),
+	});
 }
 
 /** 上次惰性清理时间（模块级，每个 Worker 实例每小时触发一次） */

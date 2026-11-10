@@ -315,6 +315,9 @@ interface S3Object {
 	/** 聚合盘文件：key 为 pool:<fileId>，操作走 /api/pool */
 	pool?: boolean;
 	fileId?: string;
+	/** 聚合盘分片分布摘要（如 "6 片 · 3 盘"），title 显示明细 */
+	poolBuckets?: string;
+	poolDetail?: string;
 }
 
 /** 除百度网盘（不支持分块）外全部支持 */
@@ -683,7 +686,9 @@ function FileBrowser({
 							id: string;
 							name: string;
 							size: number;
+							chunks: number;
 							createdAt: string;
+							buckets?: Array<{ name: string; count: number }>;
 						}>;
 					};
 					setObjects(
@@ -695,6 +700,16 @@ function FileBrowser({
 							size: f.size,
 							lastModified: f.createdAt,
 							isDirectory: false,
+							poolBuckets:
+								f.buckets && f.buckets.length > 0
+									? `${f.chunks} 片 · ${f.buckets.length} 盘`
+									: undefined,
+							poolDetail:
+								f.buckets && f.buckets.length > 0
+									? `分片分布：${f.buckets
+											.map((b) => `${b.name} ×${b.count}`)
+											.join("、")}`
+									: undefined,
 						}))
 					);
 				} else {
@@ -1718,7 +1733,7 @@ function FileBrowser({
 											type="button"
 											className="flex w-full items-center gap-2 text-left"
 											onClick={() => openObject(obj)}
-											title={obj.name}
+											title={obj.poolDetail || obj.name}
 										>
 											<FileTypeIcon
 												name={obj.name}
@@ -1728,6 +1743,14 @@ function FileBrowser({
 											<span className="truncate text-zinc-800 dark:text-zinc-200">
 												{obj.isDirectory ? `${obj.name}/` : obj.name}
 											</span>
+											{obj.pool && obj.poolBuckets && (
+												<span
+													className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium leading-none text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-300"
+													title={obj.poolDetail}
+												>
+													📦 {obj.poolBuckets}
+												</span>
+											)}
 										</button>
 									</td>
 									<td className="px-3 py-1.5 text-xs text-zinc-500">

@@ -353,9 +353,13 @@ class UploadManager {
 
   private reviveTask(pt: PersistedTask): InternalTask | null {
     if (!pt.id || !pt.uploadPath || !pt.size || !pt.chunkSize) return null;
+    const partSize = Math.min(Math.max(pt.chunkSize, 5 * 1024 * 1024), 5120 * 1024 * 1024);
     const totalParts =
       pt.mode === "pool"
-        ? pt.poolChunks?.length ?? 0
+        ? (pt.poolChunks ?? []).reduce(
+            (s, c) => s + Math.max(1, Math.ceil(c.size / partSize)),
+            0
+          )
         : pt.mode === "multipart"
           ? Math.ceil(pt.size / pt.chunkSize)
           : 1;
@@ -810,8 +814,6 @@ class UploadManager {
       t.poolChunks = data.file.chunks;
       t.poolDone = 0;
       t.poolChunkIdx = 0;
-      m.chunkSize = data.file.chunkSize;
-      m.totalParts = data.file.chunks.length;
       this.persistNow();
     }
     t.poolChunks ??= [];
@@ -826,57 +828,125 @@ class UploadManager {
     };
     updateProgress(t.poolDone);
 
-    // 2) 逐片上传：优先签名直传（B2/R2 直连），CORS 失败回退 Worker 代理流式 PUT
+    // 2) 逐片上传：每个 pool 片本身是一次 S3 分块上传（分块大小 = CHUNK_SIZE_MB，约 20MB）。
+    //    每个分块优先签名直传（B2/R2 直连），CORS 失败自动回退 Worker 代理 ——
+    //    与普通目录上传同一条久经验证的通道（直传不可用时浏览器侧会被 CORS 拦）
+    const partSize = Math.min(Math.max(m.chunkSize, 5 * 1024 * 1024), 5120 * 1024 * 1024);
+    m.totalParts = t.poolChunks.reduce(
+      (sum, c) => sum + Math.max(1, Math.ceil(c.size / partSize)),
+      0
+    );
+    let globalPartNo = 0;
+
     const chunks = t.poolChunks;
     let chunkIdx: number = t.poolChunkIdx;
     while (chunkIdx < chunks.length) {
       this.ensureActive(t);
       const idx: number = chunkIdx;
       const chunk = chunks[idx];
-      const blob = t.file!.slice(chunk.start, chunk.start + chunk.size);
+      const chunkBase = apiFileUrl(chunk.storageId, chunk.key);
+      const partCount = Math.max(1, Math.ceil(chunk.size / partSize));
 
-      let lastErr: unknown;
-      let done = false;
-      for (let attempt = 0; attempt <= PART_RETRIES && !done; attempt++) {
+      // 2a) 这一片的 multipart 初始化
+      const initRes = await fetch(`${chunkBase}?action=multipart-init`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contentType: m.contentType,
+          size: chunk.size,
+          chunkSize: partSize,
+        }),
+      });
+      if (!initRes.ok) {
+        const err = await initRes.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || `分片 ${idx + 1} 初始化失败`);
+      }
+      const uploadId = ((await initRes.json()) as { uploadId: string }).uploadId;
+
+      // 2b) 批量拿直传签名 URL（拿不到就整片走代理）
+      let directUrls: Record<number, string> = {};
+      try {
+        const urlsRes = await fetch(`${chunkBase}?action=multipart-urls`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uploadId,
+            partNumbers: Array.from({ length: partCount }, (_, i) => i + 1),
+          }),
+        });
+        if (urlsRes.ok) {
+          directUrls =
+            ((await urlsRes.json()) as { urls?: Record<number, string> }).urls ?? {};
+        }
+      } catch { /* 代理兜底 */ }
+      let partDirect = true;
+
+      // 2c) 逐分块上传：直传失败切代理（本片内记住，避免反复撞 CORS）
+      const parts: UploadTaskPart[] = [];
+      for (let n = 1; n <= partCount; n++) {
         this.ensureActive(t);
-        try {
-          // 直传
-          let putUrl: string | null = null;
-          try {
-            const res = await fetch(`/api/pool?action=chunk-url`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ fileId: t.poolFileId, index: chunk.i }),
-            });
-            if (res.ok) {
-              putUrl = ((await res.json()) as { url?: string | null }).url ?? null;
-            }
-          } catch { /* 走代理 */ }
+        const start = chunk.start + (n - 1) * partSize;
+        const end = Math.min(start + partSize, chunk.start + chunk.size);
+        const blob = t.file!.slice(start, end);
+        const doneBefore = (t.poolDone ?? 0) + (n - 1) * partSize;
 
-          const target =
-            putUrl ??
-            `${apiFileUrl(chunk.storageId, chunk.key)}`;
-          await uploadXhr(target, blob, t.xhrs, (loaded) => {
-            updateProgress(t.poolDone! + loaded);
-          });
-          done = true;
-        } catch (err) {
-          if (this.unloading || t.ctrl.canceled || t.ctrl.paused) throw err;
-          lastErr = err;
-          if (attempt < PART_RETRIES) {
-            m.error = `分片 ${idx + 1}/${chunks.length} 上传失败，第 ${attempt + 1}/${PART_RETRIES} 次重试…`;
-            this.notify();
-            await this.interruptibleSleep(t, Math.min(1000 * 2 ** attempt, 30_000));
+        let lastErr: unknown;
+        let partDone = false;
+        for (let attempt = 0; attempt <= PART_RETRIES && !partDone; attempt++) {
+          this.ensureActive(t);
+          try {
+            let etag = "";
+            if (partDirect && directUrls[n]) {
+              try {
+                const res = await uploadXhr(directUrls[n], blob, t.xhrs, (loaded) => {
+                  updateProgress(doneBefore + loaded);
+                });
+                etag = res.etag;
+              } catch {
+                partDirect = false; // CORS/网络不通：本片剩余分块直接走代理
+              }
+            }
+            if (!etag) {
+              const url = `${chunkBase}?action=multipart-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${n}`;
+              const res = await uploadXhr(url, blob, t.xhrs, (loaded) => {
+                updateProgress(doneBefore + loaded);
+              });
+              etag = res.etag || (() => { try { return (JSON.parse(res.responseText) as { etag?: string }).etag ?? ""; } catch { return ""; } })();
+            }
+            if (!etag) throw new Error(`分块 ${n} 未返回 ETag`);
+            parts.push({ partNumber: n, etag });
+            partDone = true;
+          } catch (err) {
+            if (this.unloading || t.ctrl.canceled || t.ctrl.paused) throw err;
+            lastErr = err;
+            if (attempt < PART_RETRIES) {
+              m.error = `分片 ${idx + 1}/${chunks.length} 的分块 ${n}/${partCount} 失败，第 ${attempt + 1}/${PART_RETRIES} 次重试…`;
+              this.notify();
+              await this.interruptibleSleep(t, Math.min(1000 * 2 ** attempt, 30_000));
+            }
           }
         }
+        if (!partDone) throw lastErr ?? new Error("聚合盘分块上传失败");
+        globalPartNo++;
+        m.currentPart = globalPartNo;
+        if (m.error?.includes("重试")) m.error = undefined;
+        this.notify();
       }
-      if (!done) throw lastErr ?? new Error("聚合盘分片上传失败");
+
+      // 2d) 这一片完成合并
+      const compRes = await fetch(`${chunkBase}?action=multipart-complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId, parts }),
+      });
+      if (!compRes.ok) {
+        const err = await compRes.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || `分片 ${idx + 1} 合并失败`);
+      }
 
       chunkIdx = idx + 1;
       t.poolChunkIdx = chunkIdx;
       t.poolDone = (t.poolDone ?? 0) + chunk.size;
-      m.currentPart = chunkIdx;
-      if (m.error?.includes("重试")) m.error = undefined;
       updateProgress(t.poolDone);
       this.persist();
     }

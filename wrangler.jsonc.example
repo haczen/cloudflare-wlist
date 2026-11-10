@@ -11,7 +11,7 @@
 		"ADMIN_PASSWORD": "changeme",
 		"SITE_TITLE": "WList",
 		"SITE_ANNOUNCEMENT": "Welcome to WList storage service!",
-		"CHUNK_SIZE_MB": "10",
+		"CHUNK_SIZE_MB": "20",
 		"WEBDAV_ENABLED": "false",
 		"WEBDAV_USERNAME": "webdav",
 		"WEBDAV_PASSWORD": "changeme",
