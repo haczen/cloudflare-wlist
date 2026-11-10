@@ -15,6 +15,7 @@ import {
 	completePoolFile,
 	getPoolFile,
 	resolvePoolMembers,
+	cleanExpiredPoolFiles,
 } from "~/lib/pool";
 import { createClient } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
@@ -46,9 +47,23 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		return Response.json({ error: "没有浏览权限" }, { status: 403 });
 	}
 
+	// 惰性清理：有人浏览传输盘时顺带清掉超期文件（每 isolate 每小时最多一次，不阻塞响应）
+	const ctx = context.cloudflare.ctx;
+	if (Date.now() - lastCleanupAt > 3600_000) {
+		lastCleanupAt = Date.now();
+		ctx.waitUntil(
+			cleanExpiredPoolFiles(db).catch(() => {
+				/* 清理失败不影响列表 */
+			})
+		);
+	}
+
 	const files = await listPoolFiles(db, folderId);
 	return Response.json({ files });
 }
+
+/** 上次惰性清理时间（模块级，每个 Worker 实例每小时触发一次） */
+let lastCleanupAt = 0;
 
 export async function action({ request, context }: Route.ActionArgs) {
 	const db = context.cloudflare.env.DB;

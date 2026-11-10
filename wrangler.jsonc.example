@@ -3,6 +3,9 @@
 	"name": "wlist",
 	"main": "./workers/app.ts",
 	"compatibility_date": "2025-04-04",
+	"triggers": {
+		"crons": ["17 3 * * *"]
+	},
 	"vars": {
 		"ADMIN_USERNAME": "admin",
 		"ADMIN_PASSWORD": "changeme",

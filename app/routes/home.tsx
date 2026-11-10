@@ -1485,6 +1485,35 @@ function FileBrowser({
 				/>
 			</div>
 
+			{/* 传输盘介绍横幅（聚合盘目录专用） */}
+			{folderMode === "pool" && (
+				<div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50 via-violet-50 to-pink-50 px-4 py-3 dark:border-indigo-900/60 dark:from-indigo-950/40 dark:via-violet-950/30 dark:to-pink-950/30">
+					<div className="flex items-start gap-3">
+						<span className="mt-0.5 text-2xl" aria-hidden>
+							📦
+						</span>
+						<div className="min-w-0 flex-1">
+							<h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
+								{rootLabel} · 公共传输盘
+							</h3>
+							<p className="mt-1 text-xs leading-relaxed text-indigo-700/90 dark:text-indigo-300/90">
+								面向所有用户的中转盘：<strong>无需登录</strong>
+								即可上传、下载、删除。大文件会自动切片分布到多个网盘，下载时自动拼回完整原件。
+								<span className="ml-1 rounded-md bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+									⏰ 文件保留 7 天，到期自动清理
+								</span>
+								，重要内容请及时转存。
+							</p>
+							{canUpload && (
+								<p className="mt-1 text-[11px] text-indigo-500/80 dark:text-indigo-400/70">
+									💡 把文件拖到页面任意位置即可上传 · 支持 Ctrl+V 粘贴上传 · 断网刷新页面可续传
+								</p>
+							)}
+						</div>
+					</div>
+				</div>
+			)}
+
 			{/* 批量操作条 */}
 			{selectedKeys.size > 0 && (
 				<div className="flex flex-wrap items-center gap-2 border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm dark:border-blue-900 dark:bg-blue-950/40">

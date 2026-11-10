@@ -74,4 +74,15 @@ export default {
 			cloudflare: { env, ctx },
 		});
 	},
+
+	// 每日 Cron 兜底：清理传输盘超期（7 天）文件（访问时的惰性清理为主力）
+	async scheduled(_event, env, _ctx) {
+		const db = (env as Env).DB;
+		if (!db) return;
+		const { initDatabase } = await import("~/lib/storage");
+		const { cleanExpiredPoolFiles } = await import("~/lib/pool");
+		await initDatabase(db);
+		const deleted = await cleanExpiredPoolFiles(db);
+		console.log(`[cron] pool retention cleanup: ${deleted} file(s) removed`);
+	},
 } satisfies ExportedHandler<Env>;

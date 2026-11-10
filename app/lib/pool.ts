@@ -225,3 +225,61 @@ export function groupChunksByStorage(chunks: PoolChunkInfo[]): Map<number, strin
 	}
 	return map;
 }
+
+// ---------- 过期自动清理（传输盘：文件保留 7 天） ----------
+// 注意：UI 介绍文案（home.tsx 传输盘横幅）与这里的 7 天保持一致
+
+export const POOL_RETENTION_DAYS = 7;
+
+/** 删除一个聚合文件的各桶分片对象（清单记录由调用方删） */
+export async function deletePoolChunks(
+	db: D1Database,
+	chunks: PoolChunkInfo[]
+): Promise<number> {
+	const { getStorageById } = await import("./storage");
+	const { createClient, withClientState } = await import("./client-factory");
+	let deleted = 0;
+	for (const [storageId, keys] of groupChunksByStorage(chunks)) {
+		const storage = await getStorageById(db, storageId);
+		if (!storage) continue;
+		const client = createClient(storage);
+		const batch = client as unknown as {
+			deleteObjects?: (keys: string[]) => Promise<number>;
+		};
+		try {
+			if (typeof batch.deleteObjects === "function") {
+				deleted += await withClientState(client, db, storageId, () =>
+					batch.deleteObjects!(keys)
+				);
+			} else {
+				for (const key of keys) {
+					await withClientState(client, db, storageId, () => client.deleteObject(key));
+					deleted++;
+				}
+			}
+		} catch {
+			// 单桶失败不阻断
+		}
+	}
+	return deleted;
+}
+
+/**
+ * 清理超过保留期的聚合文件（含分片对象与 D1 清单）。
+ * created_at 是 datetime('now') 空格格式，SQL 端同格式比较，无时区问题。
+ * 返回清理的文件数。由目录访问时惰性触发 + 每日 Cron 兜底。
+ */
+export async function cleanExpiredPoolFiles(db: D1Database): Promise<number> {
+	const result = await db
+		.prepare(
+			`SELECT * FROM pool_files WHERE created_at < datetime('now', ?)`
+		)
+		.bind(`-${POOL_RETENTION_DAYS} days`)
+		.all<PoolFileRow>();
+	const files = (result.results ?? []).map(rowToPoolFile);
+	for (const file of files) {
+		await deletePoolChunks(db, file.chunks);
+		await deletePoolFileRecord(db, file.id);
+	}
+	return files.length;
+}
