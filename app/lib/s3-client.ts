@@ -707,6 +707,13 @@ export class S3Client {
 			for (const m of xml.matchAll(/<Error>.*?<Key>(.*?)<\/Key>.*?<Message>(.*?)<\/Message>.*?<\/Error>/gs)) {
 				errors.push(`${m[1]}: ${m[2]}`);
 			}
+			// 诊断：B2 声称 200 但一个都没删——把原始响应暴露出来定位
+			if ((xml.match(/<Deleted>/g) || []).length === 0 && batch.length > 0) {
+				console.log(`[deleteObjects-diag] batch=${batch.length} resp=${xml.slice(0, 300)}`);
+				if (!xml.includes("<Deleted>")) {
+					throw new Error(`DeleteObjects 零删除（响应异常）：${xml.slice(0, 200) || "(空响应)"}`);
+				}
+			}
 		}
 
 		if (errors.length > 0) {

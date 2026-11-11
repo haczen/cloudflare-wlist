@@ -17,3 +17,10 @@ worker-configuration.d.ts
 
 !.dev.vars.example
 !.env.example
+.s3creds.json
+.storages.txt
+.r1.json
+.r2.json
+.residuals.json
+.home-check.html
+.home3.html
