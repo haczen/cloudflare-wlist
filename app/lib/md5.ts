@@ -67,7 +67,8 @@ function md5Core(bytes: Uint8Array): Uint8Array {
 	let c0 = 0x98badcfe;
 	let d0 = 0x10325476;
 
-	for (let chunk = 0; chunk < paddedLength; chunk += 32 * 4) {
+	// MD5 块长 64 字节（原实现误写 32*4=128，导致 ≥56 字节输入漏算第二块）
+	for (let chunk = 0; chunk < paddedLength; chunk += 64) {
 		const M = new Uint32Array(16);
 		for (let i = 0; i < 16; i++) {
 			M[i] = view.getUint32(chunk + i * 4, true);

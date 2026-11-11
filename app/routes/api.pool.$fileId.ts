@@ -134,7 +134,6 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 		// 各桶批量删 chunk
 		const grouped = groupChunksByStorage(file.chunks);
 		let deleted = 0;
-		let diag: string | undefined;
 		for (const [storageId, keys] of grouped) {
 			const storage = await getStorageById(db, storageId);
 			if (!storage) continue;
@@ -153,9 +152,8 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 						deleted++;
 					}
 				}
-			} catch (err) {
-				// 诊断期：错误带出响应定位零删除问题（修复后恢复静默）
-				diag = err instanceof Error ? err.message : String(err);
+			} catch {
+				// 单桶失败不阻断：尽力删，记录仍会清理
 			}
 		}
 		await deletePoolFileRecord(db, file.id);
@@ -167,7 +165,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 			path: file.name,
 			detail: { fileId: file.id, deleted },
 		});
-		return Response.json({ success: true, deleted, ...(diag ? { diag } : {}) });
+		return Response.json({ success: true, deleted });
 	}
 
 	if (request.method === "POST" && action === "rename") {
