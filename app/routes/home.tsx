@@ -406,20 +406,23 @@ function Modal({
 function MoveDialog({
 	storage,
 	obj,
+	rootPath,
 	onMoved,
 	onClose,
 }: {
 	storage: BrowserStorage;
 	obj: S3Object;
+	/** 当前虚拟目录的桶内根路径（移动目标限制在该目录树内，避免暴露桶内原始路径） */
+	rootPath: string;
 	onMoved: () => void;
 	onClose: () => void;
 }) {
 	const [folders, setFolders] = useState<string[] | null>(null);
-	const [dest, setDest] = useState("");
+	const [dest, setDest] = useState(rootPath);
 	const [moving, setMoving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	// 递归枚举全部文件夹作为目标选项
+	// 递归枚举虚拟目录内的全部文件夹作为目标选项
 	useEffect(() => {
 		let cancelled = false;
 		const collected: string[] = [];
@@ -445,15 +448,20 @@ function MoveDialog({
 			}
 		};
 		(async () => {
-			await walk("");
+			await walk(rootPath);
 			if (!cancelled) setFolders(collected);
 		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [storage.id]);
+	}, [storage.id, rootPath]);
 
 	const currentDir = normalizeDirPath(obj.key).split("/").slice(0, -1).join("/");
+	// 显示名：去掉虚拟目录根前缀，用户看到的是目录树视角而非桶内原始路径
+	const rel = (p: string) =>
+		rootPath && (p === rootPath || p.startsWith(rootPath + "/"))
+			? p.slice(rootPath.length + 1) || "/"
+			: p;
 
 	const handleMove = async (event: React.FormEvent) => {
 		event.preventDefault();
@@ -518,17 +526,19 @@ function MoveDialog({
 							value={dest}
 							onChange={(event) => setDest(event.target.value)}
 						>
-							<option value="/">/（根目录）</option>
+							<option value={rootPath}>
+								/（{rootPath ? "当前目录" : "桶根目录"}）
+							</option>
 							{folders.map((folder) => (
 								<option key={folder} value={folder}>
-									/{folder}
+									/{rel(folder)}
 								</option>
 							))}
 						</select>
 					)}
 				</div>
-				{currentDir && (
-					<p className="text-xs text-zinc-500">当前位于 /{currentDir}</p>
+				{currentDir && currentDir !== rootPath && (
+					<p className="text-xs text-zinc-500">当前位于 /{rel(currentDir)}</p>
 				)}
 				{error && (
 					<p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/40 dark:text-red-400">
@@ -2069,6 +2079,7 @@ function FileBrowser({
 				<MoveDialog
 					storage={storage}
 					obj={moveTarget}
+					rootPath={initialPath}
 					onMoved={loadFiles}
 					onClose={() => setMoveTarget(null)}
 				/>
