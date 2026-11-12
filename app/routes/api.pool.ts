@@ -138,19 +138,25 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!folder || folder.mode !== "pool") {
 			return Response.json({ error: "不是聚合盘目录" }, { status: 400 });
 		}
-		// 池成员：目录配置的成员；未配置 = 全部可用盘（S3 + Telegram）平均分配
+		// 池成员：默认 = 全部 S3 桶平均分配。
+		// Telegram 盘只在你显式勾选成员时参与——TG 片固定 15MB，
+		// 参与轮询时受 Workers 单请求 50 子请求限制，单文件建议 ≤1GB。
 		const allStorages = await getAllStorages(db);
-		const usable = allStorages.filter((s) => s.type === "s3" || s.type === "telegram");
+		const s3Ids = allStorages.filter((s) => s.type === "s3").map((s) => s.id);
+		const anyIds = allStorages
+			.filter((s) => s.type === "s3" || s.type === "telegram")
+			.map((s) => s.id);
+		const tgIds = allStorages.filter((s) => s.type === "telegram").map((s) => s.id);
+		const explicitlyIncludesTg =
+			(folder.poolMembers || []).some((id) => tgIds.includes(id));
 		const members = resolvePoolMembers(
 			folder,
-			usable.map((s) => s.id)
+			explicitlyIncludesTg ? anyIds : s3Ids
 		);
 		if (members.length === 0) {
 			return Response.json({ error: "没有可用的存储桶" }, { status: 400 });
 		}
-		const telegramMembers = usable
-			.filter((s) => s.type === "telegram" && members.includes(s.id))
-			.map((s) => s.id);
+		const telegramMembers = tgIds.filter((id) => members.includes(id));
 		const file = await createPoolFile(
 			db,
 			folder,
