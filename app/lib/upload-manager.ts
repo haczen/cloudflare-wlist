@@ -60,8 +60,8 @@ export interface EnqueueOptions {
   path: string;
   chunkSize: number;
   multipartSupported: boolean;
-  /** 聚合盘：传入后走跨桶分片通道 */
-  pool?: { folderId: number };
+  /** 聚合盘：传入后走跨桶分片通道；includeTg = 本次上传包含 Telegram 盘 */
+  pool?: { folderId: number; includeTg?: boolean };
 }
 
 export type ResumeResult = "started" | "need-file" | "denied" | "mismatch" | "missing";
@@ -90,6 +90,7 @@ interface InternalTask {
   useDirectUpload?: boolean;
   // 聚合盘状态
   poolFolderId?: number;
+  poolIncludeTg?: boolean; // 本次上传是否包含 Telegram 盘（init 时生效）
   poolFileId?: string;
   poolChunks?: PoolChunk[];
   poolDone?: number;      // 已完成分片的累计字节
@@ -115,6 +116,7 @@ interface PersistedTask {
   finishedAt?: number;
   error?: string;
   poolFolderId?: number;
+  poolIncludeTg?: boolean;
   poolFileId?: string;
   poolChunks?: PoolChunk[];
   poolDone?: number;
@@ -397,6 +399,7 @@ class UploadManager {
       completedParts: pt.completedParts,
       useDirectUpload: pt.useDirectUpload ?? true,
       poolFolderId: pt.poolFolderId,
+      poolIncludeTg: pt.poolIncludeTg,
       poolFileId: pt.poolFileId,
       poolChunks: pt.poolChunks,
       poolDone: pt.poolDone,
@@ -509,6 +512,7 @@ class UploadManager {
       finishedAt: m.finishedAt,
       error: m.error,
       poolFolderId: t.poolFolderId,
+      poolIncludeTg: t.poolIncludeTg,
       poolFileId: t.poolFileId,
       poolChunks: t.poolChunks,
       poolDone: t.poolDone,
@@ -583,7 +587,12 @@ class UploadManager {
         file, handle: entry.handle ?? null,
         xhrs: new Set(), partProgress: {}, samples: [], ctrl: { paused: false, canceled: false },
         useDirectUpload: true,
-        ...(opts.pool ? { poolFolderId: opts.pool.folderId } : {}),
+        ...(opts.pool
+          ? {
+              poolFolderId: opts.pool.folderId,
+              poolIncludeTg: opts.pool.includeTg === true,
+            }
+          : {}),
       });
       if (entry.handle) void idbPutHandle(id, entry.handle);
       added++;
@@ -801,6 +810,7 @@ class UploadManager {
           name: m.name,
           size: m.size,
           contentType: m.contentType,
+          includeTelegram: t.poolIncludeTg === true,
         }),
       });
       if (!res.ok) {

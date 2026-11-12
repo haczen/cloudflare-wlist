@@ -20,6 +20,7 @@ import {
 } from "~/lib/pool";
 import { createClient } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
+import { TG_POOL_CHUNK_SIZE } from "~/lib/telegram-client";
 
 export async function loader({ request, context }: Route.LoaderArgs) {
 	const db = context.cloudflare.env.DB;
@@ -138,21 +139,22 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!folder || folder.mode !== "pool") {
 			return Response.json({ error: "不是聚合盘目录" }, { status: 400 });
 		}
-		// 池成员：默认 = 全部 S3 桶平均分配。
-		// Telegram 盘只在你显式勾选成员时参与——TG 片固定 15MB，
-		// 参与轮询时受 Workers 单请求 50 子请求限制，单文件建议 ≤1GB。
+		// 池成员：默认 = 全部 S3 桶平均分配；TG 仅在本次上传勾选「包含 Telegram」时参与。
+		// TG 片固定 15MB，且每片下载 = 2 个子请求（getFile + 文件本体），
+		// Workers 单请求 50 子请求上限 → 安全线 = 46×M/(M+1) 片（M = 成员数，7 桶时 ≈600MB）。
 		const allStorages = await getAllStorages(db);
 		const s3Ids = allStorages.filter((s) => s.type === "s3").map((s) => s.id);
 		const anyIds = allStorages
 			.filter((s) => s.type === "s3" || s.type === "telegram")
 			.map((s) => s.id);
 		const tgIds = allStorages.filter((s) => s.type === "telegram").map((s) => s.id);
-		const explicitlyIncludesTg =
-			(folder.poolMembers || []).some((id) => tgIds.includes(id));
-		const members = resolvePoolMembers(
-			folder,
-			explicitlyIncludesTg ? anyIds : s3Ids
-		);
+		const tgSafeMax =
+			Math.floor((46 * anyIds.length) / (anyIds.length + 1)) * TG_POOL_CHUNK_SIZE;
+		const wantTg =
+			body.includeTelegram === true &&
+			tgIds.length > 0 &&
+			size <= tgSafeMax; // 超线自动只用云桶（分布见文件列表的桶徽章）
+		const members = resolvePoolMembers(folder, wantTg ? anyIds : s3Ids);
 		if (members.length === 0) {
 			return Response.json({ error: "没有可用的存储桶" }, { status: 400 });
 		}

@@ -552,6 +552,9 @@ function MoveDialog({
 
 // ---------- 文件浏览器 ----------
 
+/** 上次聚合盘上传「云桶+TG」的选择（模块级：会话内记住，下次默认同选项） */
+let lastPoolWithTg = false;
+
 function FileBrowser({
 	storage,
 	isAdmin,
@@ -561,6 +564,7 @@ function FileBrowser({
 	currentFolderId,
 	folderAccess,
 	folderMode,
+	tgPoolOption,
 	storageOptions,
 	onFoldersChanged,
 }: {
@@ -577,6 +581,8 @@ function FileBrowser({
 	folderAccess: { list: boolean; download: boolean; upload: boolean };
 	/** 聚合盘目录：列表/上传/下载/删除全部走聚合通道 */
 	folderMode: "normal" | "pool";
+	/** 聚合盘上传时可勾选「包含 Telegram」（已配置 TG 盘且已登录；访客为 false） */
+	tgPoolOption: boolean;
 	/** 当前用户可上传的桶（供"新建文件"对话框选择目标） */
 	storageOptions: StorageOption[];
 	/** 目录树变更后刷新侧边栏 */
@@ -880,8 +886,13 @@ function FileBrowser({
 
 	// ---------- 上传 ----------
 	// 统一走 uploadManager：多任务并发 + 断点续传 + 刷新恢复（lib/upload-manager.ts）
-	const enqueueUploads = (entries: EnqueueEntry[]) => {
-		if (entries.length === 0 || !canUpload) return;
+	// 聚合盘上传前先选分布方式（TG 按次勾选、记住上次选择；访客/未配置 TG 盘直接云桶平分）
+	const pendingPoolUploadRef = useRef<EnqueueEntry[] | null>(null);
+	const [poolPickOpen, setPoolPickOpen] = useState(false);
+	const [poolPickCount, setPoolPickCount] = useState(0);
+	const [poolWithTg, setPoolWithTg] = useState(lastPoolWithTg);
+
+	const doUpload = (entries: EnqueueEntry[], withTg: boolean) => {
 		// R2/S3 分块最小 5MB，最大 5GB，夹紧到安全区间
 		const chunkSize = Math.min(Math.max(chunkSizeMB, 5), 5120) * 1024 * 1024;
 		uploadManager.enqueue(entries, {
@@ -891,9 +902,32 @@ function FileBrowser({
 			multipartSupported: supportsMultipart(storage.type),
 			// 聚合盘目录：走跨桶分片通道（服务端决定分布）
 			...(folderMode === "pool" && currentFolderId !== null
-				? { pool: { folderId: currentFolderId } }
+				? { pool: { folderId: currentFolderId, includeTg: withTg } }
 				: {}),
 		});
+	};
+
+	const enqueueUploads = (entries: EnqueueEntry[]) => {
+		if (entries.length === 0 || !canUpload) return;
+		if (folderMode === "pool" && tgPoolOption) {
+			pendingPoolUploadRef.current = entries;
+			setPoolPickCount(entries.length);
+			setPoolPickOpen(true);
+			return;
+		}
+		doUpload(entries, false);
+	};
+
+	const closePoolPick = () => {
+		pendingPoolUploadRef.current = null;
+		setPoolPickOpen(false);
+	};
+	const confirmPoolPick = () => {
+		const entries = pendingPoolUploadRef.current ?? [];
+		pendingPoolUploadRef.current = null;
+		setPoolPickOpen(false);
+		lastPoolWithTg = poolWithTg;
+		doUpload(entries, poolWithTg);
 	};
 
 	const handleUploadInput = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1511,6 +1545,90 @@ function FileBrowser({
 					onChange={handleUploadInput}
 				/>
 			</div>
+
+			{/* 聚合盘上传分布选择（Telegram 按次参与） */}
+			{poolPickOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+					onClick={closePoolPick}
+				>
+					<div
+						className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-4 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+							📦 分布方式
+						</h3>
+						<p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+							本次上传 {poolPickCount} 个文件，分片怎么放：
+						</p>
+						<div className="mt-3 space-y-2">
+							<label
+								className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 transition ${
+									!poolWithTg
+										? "border-blue-400 bg-blue-50/60 dark:border-blue-500 dark:bg-blue-500/10"
+										: "border-zinc-200 dark:border-zinc-700"
+								}`}
+							>
+								<input
+									type="radio"
+									name="pool-dist"
+									className="mt-0.5 h-4 w-4 accent-blue-600"
+									checked={!poolWithTg}
+									onChange={() => setPoolWithTg(false)}
+								/>
+								<span>
+									<span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+										☁️ 全部云桶平分（推荐）
+									</span>
+									<span className="mt-0.5 block text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+										切片自适应大小、轮询平分到所有 B2 云桶，几十 GB 单文件也稳
+									</span>
+								</span>
+							</label>
+							<label
+								className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 transition ${
+									poolWithTg
+										? "border-emerald-400 bg-emerald-50/60 dark:border-emerald-500 dark:bg-emerald-500/10"
+										: "border-zinc-200 dark:border-zinc-700"
+								}`}
+							>
+								<input
+									type="radio"
+									name="pool-dist"
+									className="mt-0.5 h-4 w-4 accent-emerald-600"
+									checked={poolWithTg}
+									onChange={() => setPoolWithTg(true)}
+								/>
+								<span>
+									<span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+										📨 云桶 + Telegram
+									</span>
+									<span className="mt-0.5 block text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+										云桶照常平分，另有部分 15MB 片进 TG 收藏夹；单文件需 ≤600MB，超出自动只用云桶
+									</span>
+								</span>
+							</label>
+						</div>
+						<div className="mt-4 flex justify-end gap-2">
+							<button
+								type="button"
+								className="btn-outline !px-3 !py-1.5 !text-xs"
+								onClick={closePoolPick}
+							>
+								取消
+							</button>
+							<button
+								type="button"
+								className="btn-primary !px-3 !py-1.5 !text-xs"
+								onClick={confirmPoolPick}
+							>
+								开始上传
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* 传输盘介绍横幅（聚合盘目录专用） */}
 			{folderMode === "pool" && (
@@ -2472,6 +2590,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 		? storages.map((s) => ({ id: s.id, name: s.name }))
 		: [];
 
+	// 聚合盘上传可选「包含 Telegram」：需配置了 TG 盘，且仅登录用户（访客默认云桶平分）
+	const tgPoolOption =
+		storages.some((s) => s.type === "telegram") && (isAdmin || !!user);
+
 	// 公告关闭状态（记录已读文本，公告变更后重新显示）
 	const [announcementDismissed, setAnnouncementDismissed] = useState("");
 	useEffect(() => {
@@ -2774,6 +2896,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 							}
 						}
 						folderMode={currentFolder?.mode === "pool" ? "pool" : "normal"}
+						tgPoolOption={tgPoolOption}
 						storageOptions={uploadableStorages}
 						onFoldersChanged={refreshStorages}
 					/>
