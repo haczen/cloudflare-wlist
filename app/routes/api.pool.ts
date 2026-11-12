@@ -138,18 +138,28 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!folder || folder.mode !== "pool") {
 			return Response.json({ error: "不是聚合盘目录" }, { status: 400 });
 		}
-		// 池成员：目录配置的成员；未配置 = 全部 S3 桶平均分配
-		const storages = (await getAllStorages(db)).filter(
-			(s) => s.type === "s3"
-		);
+		// 池成员：目录配置的成员；未配置 = 全部可用盘（S3 + Telegram）平均分配
+		const allStorages = await getAllStorages(db);
+		const usable = allStorages.filter((s) => s.type === "s3" || s.type === "telegram");
 		const members = resolvePoolMembers(
 			folder,
-			storages.map((s) => s.id)
+			usable.map((s) => s.id)
 		);
 		if (members.length === 0) {
 			return Response.json({ error: "没有可用的存储桶" }, { status: 400 });
 		}
-		const file = await createPoolFile(db, folder, name, size, contentType, members);
+		const telegramMembers = usable
+			.filter((s) => s.type === "telegram" && members.includes(s.id))
+			.map((s) => s.id);
+		const file = await createPoolFile(
+			db,
+			folder,
+			name,
+			size,
+			contentType,
+			members,
+			telegramMembers
+		);
 		await logAudit(db, {
 			action: "pool.init",
 			userType: isAdmin ? "admin" : user ? "user" : "guest",
@@ -183,7 +193,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!storage) {
 			return Response.json({ error: "分片所在桶不存在" }, { status: 404 });
 		}
-		const client = createClient(storage) as unknown as {
+		const client = createClient(storage, db, storage.id) as unknown as {
 			getSignedPutUrl?: (key: string, expiresIn?: number) => Promise<string>;
 		};
 		if (typeof client.getSignedPutUrl !== "function") {
@@ -205,6 +215,9 @@ export async function action({ request, context }: Route.ActionArgs) {
 			path: file?.name,
 			detail: { fileId, size: file?.size, chunks: file?.chunks.length },
 		});
+		// TG 通知（配置了 telegram 盘才发；失败不影响响应）
+		const { notifyPoolUploaded } = await import("~/lib/telegram-bot");
+		context.cloudflare.ctx.waitUntil(notifyPoolUploaded(db, fileId).catch(() => {}));
 		return Response.json({ success: true });
 	}
 

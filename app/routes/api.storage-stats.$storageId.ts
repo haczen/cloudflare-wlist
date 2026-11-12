@@ -122,7 +122,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
 			return Response.json({ error: "Storage not found" }, { status: 404 });
 		}
 
-		const client = createClient(storage);
+		const client = createClient(storage, db, storage.id);
 		const stats = await withClientState(client, db, storageId, () =>
 			collectStats(client)
 		);

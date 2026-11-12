@@ -123,7 +123,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 
 		// 先在桶里真实创建，再记虚拟目录
 		try {
-			const client = createClient(storage);
+			const client = createClient(storage, db, storage.id);
 			await withClientState(client, db, targetStorageId, () =>
 				client.createFolder(storagePath)
 			);
@@ -307,7 +307,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 		const storage = await getStorageById(db, folder.storageId);
 		if (storage) {
 			try {
-				const client = createClient(storage);
+				const client = createClient(storage, db, storage.id);
 				const keys = await listAllKeys(client, db, folder.storageId, folder.storagePath);
 				for (const key of keys) {
 					await withClientState(client, db, folder.storageId, () =>

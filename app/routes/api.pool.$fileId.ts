@@ -83,7 +83,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 					if (!storage) {
 						throw new Error(`分片 ${chunk.i} 所在桶不存在`);
 					}
-					const client = createClient(storage);
+					const client = createClient(storage, db, storage.id);
 					const resp = await client.getObject(chunk.key);
 					if (!resp.ok || !resp.body) {
 						throw new Error(`分片 ${chunk.i} 读取失败: ${resp.status}`);
@@ -137,7 +137,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 		for (const [storageId, keys] of grouped) {
 			const storage = await getStorageById(db, storageId);
 			if (!storage) continue;
-			const client = createClient(storage);
+			const client = createClient(storage, db, storage.id);
 			const batch = client as unknown as {
 				deleteObjects?: (keys: string[]) => Promise<number>;
 			};

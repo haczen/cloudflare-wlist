@@ -423,6 +423,22 @@ export async function initDatabase(db: D1Database): Promise<void> {
       FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
     )`,
 		`CREATE INDEX IF NOT EXISTS idx_pool_files_folder ON pool_files(folder_id)`,
+		// Telegram 盘：对象本体是 TG 消息，这里存元数据（file_id/message_id）
+		`CREATE TABLE IF NOT EXISTS tg_objects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      storage_id INTEGER NOT NULL,
+      object_key TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      message_id INTEGER NOT NULL,
+      file_id TEXT NOT NULL,
+      file_unique_id TEXT,
+      size INTEGER DEFAULT 0,
+      content_type TEXT DEFAULT 'application/octet-stream',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(storage_id, object_key),
+      FOREIGN KEY (storage_id) REFERENCES storages(id) ON DELETE CASCADE
+    )`,
+		`CREATE INDEX IF NOT EXISTS idx_tg_objects_storage ON tg_objects(storage_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_storages_is_public ON storages(is_public)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(share_token)`,

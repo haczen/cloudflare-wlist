@@ -3,6 +3,7 @@
 // `<folderPath>/.wlistpool/<fileId>/<序号>`，普通目录列表会隐藏该前缀。
 
 import type { Folder } from "./folders";
+import { TG_POOL_CHUNK_SIZE } from "./telegram-client";
 
 export interface PoolChunkInfo {
 	/** 分片序号（0 起） */
@@ -66,9 +67,11 @@ function rowToPoolFile(row: PoolFileRow): PoolFile {
  * 分片大小：默认 256MB；但保证总 chunk 数 ≤ 40 ——
  * 下载回源时每个 chunk 是一次子请求，Workers 免费版单请求上限 50 个子请求。
  * 上限 5GB（S3 单对象限制），下限 256MB。
+ * Telegram 成员盘例外：Bot API 下载上限 20MB，固定 15MB/片（子请求数由下载端分段控制）。
  */
-export function computeChunkSize(size: number): number {
+export function computeChunkSize(size: number, hasTelegramMember = false): number {
 	const MB = 1024 * 1024;
+	if (hasTelegramMember) return TG_POOL_CHUNK_SIZE;
 	const MIN = 256 * MB;
 	const MAX = 5 * 1024 * MB;
 	if (size <= 0) return MIN;
@@ -87,14 +90,15 @@ export function resolvePoolMembers(
 	return allStorageIds;
 }
 
-/** 轮询分布：chunk i → members[i mod N] */
+/** 轮询分布：chunk i → members[i mod N]。telegramMembers 非空时用 15MB 分片 */
 export function planPoolChunks(
 	folder: Folder,
 	fileId: string,
 	size: number,
-	memberIds: number[]
+	memberIds: number[],
+	telegramMemberIds: number[] = []
 ): PoolChunkInfo[] {
-	const chunkSize = computeChunkSize(size);
+	const chunkSize = computeChunkSize(size, telegramMemberIds.length > 0);
 	const prefix = folder.storagePath
 		? `${folder.storagePath}/.wlistpool/${fileId}/`
 		: `.wlistpool/${fileId}/`;
@@ -119,11 +123,12 @@ export async function createPoolFile(
 	name: string,
 	size: number,
 	contentType: string,
-	memberIds: number[]
+	memberIds: number[],
+	telegramMemberIds: number[] = []
 ): Promise<PoolFile> {
 	const id = crypto.randomUUID();
-	const chunkSize = computeChunkSize(size);
-	const chunks = planPoolChunks(folder, id, size, memberIds);
+	const chunkSize = computeChunkSize(size, telegramMemberIds.length > 0);
+	const chunks = planPoolChunks(folder, id, size, memberIds, telegramMemberIds);
 	await db
 		.prepare(
 			`INSERT INTO pool_files (id, folder_id, name, size, chunk_size, content_type, status, chunks)

@@ -277,7 +277,7 @@ export async function handleWebdavRequest(
 		return new Response("Storage not found", { status: 404 });
 	}
 
-	const client = createClient(storage);
+	const client = createClient(storage, db, storage.id);
 	const url = new URL(request.url);
 	const baseUrl = `/dav/${storageId}`;
 

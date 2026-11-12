@@ -4,6 +4,7 @@ import { OneDriveClient } from "./onedrive-client";
 import { GoogleDriveClient } from "./gdrive-client";
 import { AliyunDriveClient } from "./alicloud-client";
 import { BaiduYunClient } from "./baiduyun-client";
+import { TelegramClient } from "./telegram-storage";
 
 export type StorageClient =
 	| S3Client
@@ -11,7 +12,8 @@ export type StorageClient =
 	| OneDriveClient
 	| GoogleDriveClient
 	| AliyunDriveClient
-	| BaiduYunClient;
+	| BaiduYunClient
+	| TelegramClient;
 
 type StatefulClient = {
 	getStateUpdates: () => {
@@ -21,6 +23,7 @@ type StatefulClient = {
 };
 
 export interface ClientStorageConfig {
+	id?: number;
 	type: string;
 	endpoint: string;
 	region: string;
@@ -36,9 +39,30 @@ export interface ClientStorageConfig {
  * 根据存储类型创建对应客户端。
  * "webdev" 是旧版（CList）的类型拼写，与 "webdav" 等价，保证旧备份可直接导入。
  */
-export function createClient(storage: ClientStorageConfig): StorageClient {
+export function createClient(
+	storage: ClientStorageConfig,
+	db?: D1Database,
+	storageId?: number
+): StorageClient {
 	const type = storage.type?.trim().toLowerCase() || "s3";
 
+	if (type === "telegram") {
+		const sid = storageId ?? storage.id;
+		if (!db || sid === undefined) {
+			throw new Error("Telegram 盘需要 D1 绑定与 storage id");
+		}
+		const token = String(storage.config?.botToken || "");
+		const chatId = String(storage.config?.chatId || "");
+		if (!token || !chatId) {
+			throw new Error("Telegram 盘缺少 botToken / chatId 配置");
+		}
+		return new TelegramClient({
+			storageId: sid,
+			db,
+			botToken: token,
+			chatId,
+		});
+	}
 	if (type === "webdav" || type === "webdev") {
 		return new WebDavClient({
 			endpoint: storage.endpoint,

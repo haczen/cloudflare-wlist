@@ -95,7 +95,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 		}
 	}
 
-	const client = createClient(storage);
+	const client = createClient(storage, db, storage.id);
 
 	// 列目录
 	if (action === "list" || (!action && !isInlineImageRequest)) {
@@ -371,7 +371,7 @@ export async function action({
 		}
 	}
 
-	const client = createClient(storage);
+	const client = createClient(storage, db, storage.id);
 
 	// 初始化分块上传
 	if (method === "POST" && action === "multipart-init") {
