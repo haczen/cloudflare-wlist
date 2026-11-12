@@ -150,8 +150,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 		const tgIds = allStorages.filter((s) => s.type === "telegram").map((s) => s.id);
 		const tgSafeMax =
 			Math.floor((46 * anyIds.length) / (anyIds.length + 1)) * TG_POOL_CHUNK_SIZE;
+		// TG 仅限登录用户勾选（访客往别人 TG 收藏夹塞文件没有意义，客户端也不给这个选项）
 		const wantTg =
 			body.includeTelegram === true &&
+			!!user &&
 			tgIds.length > 0 &&
 			size <= tgSafeMax; // 超线自动只用云桶（分布见文件列表的桶徽章）
 		const members = resolvePoolMembers(folder, wantTg ? anyIds : s3Ids);
