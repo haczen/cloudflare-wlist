@@ -85,11 +85,21 @@ export async function handleTelegramWebhook(
 	}
 	// 白名单：仅配置的 chatId 可操作
 	if (String(msg.chat.id) !== tg.chatId) {
-		await sendMessage(tg.botToken, String(msg.chat.id), "⛔ 未授权的访问。");
+		// 陌生人：尝试提示后静默（对方没开过对话会 chat not found，不能让它炸掉 webhook）
+		try {
+			await sendMessage(tg.botToken, String(msg.chat.id), "⛔ 未授权的访问。");
+		} catch {
+			/* ignore */
+		}
 		return new Response("ok");
 	}
 
 	const siteTitle = env.SITE_TITLE || "WList";
+	// 回复辅助：TG 侧失败（网络/限流）不影响 webhook 确认，否则 TG 会重推造成重复处理
+	const reply = (text: string) =>
+		sendMessage(tg.botToken, tg.chatId, text).catch((err) => {
+			console.error("TG reply failed:", err instanceof Error ? err.message : err);
+		});
 
 	// ---- 文件转存 ----
 	if (msg.document) {
@@ -97,17 +107,14 @@ export async function handleTelegramWebhook(
 		const name = doc.file_name || "file";
 		const size = doc.file_size ?? 0;
 		if (size > TG_DOWNLOAD_LIMIT) {
-			await sendMessage(
-				tg.botToken,
-				tg.chatId,
-				`⚠️ <b>${name}</b>（${fmtSize(size)}）超过 20MB：Bot API 拉不回单条大消息。\n` +
+			await reply(`⚠️ <b>${name}</b>（${fmtSize(size)}）超过 20MB：Bot API 拉不回单条大消息。\n` +
 					`请打开 ${siteTitle} 网页上传——聚合盘会自动切片（TG 盘每片 15MB）。`
 			);
 			return new Response("ok");
 		}
 		const folderId = await findTransferFolder(db);
 		if (!folderId) {
-			await sendMessage(tg.botToken, tg.chatId, "⚠️ 还没有聚合盘目录，请先在网页上创建。");
+			await reply("⚠️ 还没有聚合盘目录，请先在网页上创建。");
 			return new Response("ok");
 		}
 		try {
@@ -131,16 +138,10 @@ export async function handleTelegramWebhook(
 				) => Promise<void>;
 			};
 			await put.putObject(key, buf, doc.mime_type || "application/octet-stream");
-			await sendMessage(
-				tg.botToken,
-				tg.chatId,
-				`✅ <b>${name}</b>（${fmtSize(size)}）已转存到「${folder.name}」`
+			await reply(`✅ <b>${name}</b>（${fmtSize(size)}）已转存到「${folder.name}」`
 			);
 		} catch (err) {
-			await sendMessage(
-				tg.botToken,
-				tg.chatId,
-				`❌ 转存失败：${err instanceof Error ? err.message : "未知错误"}`
+			await reply(`❌ 转存失败：${err instanceof Error ? err.message : "未知错误"}`
 			);
 		}
 		return new Response("ok");
@@ -151,10 +152,7 @@ export async function handleTelegramWebhook(
 	if (!text) return new Response("ok");
 
 	if (text === "/start" || text === "/help") {
-		await sendMessage(
-			tg.botToken,
-			tg.chatId,
-			`👋 我是 <b>${siteTitle}</b> 传输盘助手\n\n` +
+		await reply(`👋 我是 <b>${siteTitle}</b> 传输盘助手\n\n` +
 				`📎 直接发文件给我（≤20MB）→ 自动转存到传输盘\n` +
 				`📋 /list — 列出传输盘文件\n` +
 				`🔗 /link 文件名 — 获取下载直链\n` +
@@ -166,7 +164,7 @@ export async function handleTelegramWebhook(
 	if (text === "/list") {
 		const folderId = await findTransferFolder(db);
 		if (!folderId) {
-			await sendMessage(tg.botToken, tg.chatId, "还没有聚合盘目录。");
+			await reply("还没有聚合盘目录。");
 			return new Response("ok");
 		}
 		// 聚合文件清单
@@ -204,10 +202,7 @@ export async function handleTelegramWebhook(
 		} catch {
 			/* 桶列表失败只列聚合清单 */
 		}
-		await sendMessage(
-			tg.botToken,
-			tg.chatId,
-			lines.length > 0
+		await reply(lines.length > 0
 				? lines.join("\n") + (poolFiles.length > 20 ? "\n…" : "")
 				: "传输盘是空的。发个文件给我试试 📎"
 		);
@@ -218,7 +213,7 @@ export async function handleTelegramWebhook(
 		const query = text.slice(6).trim();
 		const folderId = await findTransferFolder(db);
 		if (!folderId) {
-			await sendMessage(tg.botToken, tg.chatId, "还没有聚合盘目录。");
+			await reply("还没有聚合盘目录。");
 			return new Response("ok");
 		}
 		// 先找聚合清单，再找普通文件
@@ -226,10 +221,7 @@ export async function handleTelegramWebhook(
 		const hit = poolFiles.find((f) => f.name === query || f.name.includes(query));
 		if (hit) {
 			const base = new URL(request.url).origin;
-			await sendMessage(
-				tg.botToken,
-				tg.chatId,
-				`🔗 <b>${hit.name}</b>\n${base}/api/pool/${hit.id}?download=1`
+			await reply(`🔗 <b>${hit.name}</b>\n${base}/api/pool/${hit.id}?download=1`
 			);
 			return new Response("ok");
 		}
@@ -249,7 +241,7 @@ export async function handleTelegramWebhook(
 						const base = new URL(request.url).origin;
 						const { encodeFilePath } = await import("~/lib/api-path");
 						const url = `${base}/api/files/${storage.id}/${encodeFilePath(obj.key)}?action=download`;
-						await sendMessage(tg.botToken, tg.chatId, `🔗 <b>${obj.name}</b>\n${url}`);
+						await reply(`🔗 <b>${obj.name}</b>\n${url}`);
 						return new Response("ok");
 					}
 				}
@@ -257,11 +249,11 @@ export async function handleTelegramWebhook(
 		} catch {
 			/* fallthrough */
 		}
-		await sendMessage(tg.botToken, tg.chatId, `没找到「${query}」，用 /list 看看文件名。`);
+		await reply(`没找到「${query}」，用 /list 看看文件名。`);
 		return new Response("ok");
 	}
 
-	await sendMessage(tg.botToken, tg.chatId, "未知指令。发 /start 看帮助 📎");
+	await reply("未知指令。发 /start 看帮助 📎");
 	return new Response("ok");
 }
 
@@ -270,11 +262,15 @@ export async function notifyRetentionCleanup(db: D1Database, deleted: number): P
 	if (deleted <= 0) return;
 	const tg = await getTgStorage(db);
 	if (!tg) return;
-	await sendMessage(
-		tg.botToken,
-		tg.chatId,
-		`🧹 传输盘自动清理：${deleted} 个超过 7 天的文件已删除`
-	);
+	try {
+		await sendMessage(
+			tg.botToken,
+			tg.chatId,
+			`🧹 传输盘自动清理：${deleted} 个超过 7 天的文件已删除`
+		);
+	} catch {
+		/* 通知失败忽略 */
+	}
 }
 
 /** 上传完成通知（由 api.pool complete 时调用） */
@@ -286,9 +282,13 @@ export async function notifyPoolUploaded(
 	if (!tg) return;
 	const file = await getPoolFile(db, fileId);
 	if (!file) return;
-	await sendMessage(
-		tg.botToken,
-		tg.chatId,
-		`📥 <b>${file.name}</b>（${fmtSize(file.size)}）上传完成\n分片：${file.chunks.length} 片`
-	);
+	try {
+		await sendMessage(
+			tg.botToken,
+			tg.chatId,
+			`📥 <b>${file.name}</b>（${fmtSize(file.size)}）上传完成\n分片：${file.chunks.length} 片`
+		);
+	} catch {
+		/* 通知失败忽略 */
+	}
 }
