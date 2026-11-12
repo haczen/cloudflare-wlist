@@ -24,3 +24,7 @@ worker-configuration.d.ts
 .residuals.json
 .home-check.html
 .home3.html
+
+# E2E 测试脚本（可能含密码，永不提交）
+.e2e-*
+
