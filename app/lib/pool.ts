@@ -16,6 +16,8 @@ export interface PoolChunkInfo {
 	size: number;
 	/** 在源文件中的起始偏移 */
 	start: number;
+	/** 该片落在 Telegram 盘（上传走单片 PUT/sendDocument，无 multipart） */
+	telegram?: boolean;
 }
 
 export interface PoolFile {
@@ -106,12 +108,14 @@ export function planPoolChunks(
 	const total = Math.max(1, Math.ceil(size / chunkSize));
 	for (let i = 0; i < total; i++) {
 		const start = i * chunkSize;
+		const storageId = memberIds[i % memberIds.length];
 		chunks.push({
 			i,
-			storageId: memberIds[i % memberIds.length],
+			storageId,
 			key: `${prefix}${String(i).padStart(4, "0")}`,
 			size: Math.min(chunkSize, size - start),
 			start,
+			...(telegramMemberIds.includes(storageId) ? { telegram: true } : {}),
 		});
 	}
 	return chunks;

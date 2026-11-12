@@ -73,6 +73,8 @@ interface PoolChunk {
   key: string;
   size: number;
   start: number;
+  /** 落在 Telegram 盘的片：单片 PUT（sendDocument），走不了 multipart */
+  telegram?: boolean;
 }
 
 interface InternalTask {
@@ -856,6 +858,43 @@ class UploadManager {
       const chunk = chunks[idx];
       const chunkBase = apiFileUrl(chunk.storageId, chunk.key);
       const partCount = Math.max(1, Math.ceil(chunk.size / partSize));
+
+      // 2-TG) Telegram 片：15MB 整片 PUT 直发服务端（TG 客户端转 sendDocument）。
+      //       无 multipart/ETag/直传 URL，重试与进度跟 S3 片同一套框架。
+      if (chunk.telegram) {
+        const blob = t.file!.slice(chunk.start, chunk.start + chunk.size);
+        const base = t.poolDone ?? 0;
+        let tgErr: unknown = null;
+        let done = false;
+        for (let attempt = 0; attempt <= PART_RETRIES && !done; attempt++) {
+          this.ensureActive(t);
+          try {
+            await uploadXhr(chunkBase, blob, t.xhrs, (loaded) => {
+              updateProgress(base + loaded);
+            });
+            done = true;
+          } catch (err) {
+            if (this.unloading || t.ctrl.canceled || t.ctrl.paused) throw err;
+            tgErr = err;
+            if (attempt < PART_RETRIES) {
+              m.error = `TG 分片 ${idx + 1}/${chunks.length} 失败，第 ${attempt + 1}/${PART_RETRIES} 次重试…`;
+              this.notify();
+              await this.interruptibleSleep(t, Math.min(1000 * 2 ** attempt, 30_000));
+            }
+          }
+        }
+        if (!done) throw tgErr ?? new Error("TG 分片上传失败");
+        globalPartNo++;
+        m.currentPart = globalPartNo;
+        if (m.error?.includes("重试")) m.error = undefined;
+        chunkIdx = idx + 1;
+        t.poolChunkIdx = chunkIdx;
+        t.poolDone = (t.poolDone ?? 0) + chunk.size;
+        updateProgress(t.poolDone);
+        this.persist();
+        this.notify();
+        continue;
+      }
 
       // 2a) 这一片的 multipart 初始化
       const initRes = await fetch(`${chunkBase}?action=multipart-init`, {
