@@ -97,6 +97,10 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 				}
 				controller.close();
 			} catch (err) {
+				// 下载中断归因：tail 里能看出是哪片回源失败（vs 客户端主动断开）
+				console.error(
+					`pool.download aborted file=${file.id} chunk-exit err=${err instanceof Error ? err.message : String(err)}`
+				);
 				controller.error(err);
 			}
 		},
