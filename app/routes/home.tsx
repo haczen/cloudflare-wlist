@@ -891,11 +891,18 @@ function FileBrowser({
 	const [poolPickOpen, setPoolPickOpen] = useState(false);
 	const [poolPickCount, setPoolPickCount] = useState(0);
 	const [poolWithTg, setPoolWithTg] = useState(lastPoolWithTg);
+	/** 入队去重提示（同名同大小任务已在队列）：显示 8 秒自动消失 */
+	const [uploadHint, setUploadHint] = useState("");
+	useEffect(() => {
+		if (!uploadHint) return;
+		const t = setTimeout(() => setUploadHint(""), 8000);
+		return () => clearTimeout(t);
+	}, [uploadHint]);
 
 	const doUpload = (entries: EnqueueEntry[], withTg: boolean) => {
 		// R2/S3 分块最小 5MB，最大 5GB，夹紧到安全区间
 		const chunkSize = Math.min(Math.max(chunkSizeMB, 5), 5120) * 1024 * 1024;
-		uploadManager.enqueue(entries, {
+		const { skipped } = uploadManager.enqueue(entries, {
 			storageId: storage.id,
 			path,
 			chunkSize,
@@ -905,6 +912,12 @@ function FileBrowser({
 				? { pool: { folderId: currentFolderId, includeTg: withTg } }
 				: {}),
 		});
+		// 同名同大小的任务已在队列（上传中/排队/暂停）：明确告知，避免「点了没反应」
+		if (skipped.length > 0) {
+			setUploadHint(
+				`跳过 ${skipped.length} 个文件：${skipped.join("、")} —— 同名同大小的任务已在队列中（可暂停/取消原任务后再传）`
+			);
+		}
 	};
 
 	const enqueueUploads = (entries: EnqueueEntry[]) => {
@@ -1715,6 +1728,20 @@ function FileBrowser({
 						<p className="text-sm font-medium text-blue-700 dark:text-blue-300">
 							松开鼠标上传到{path ? ` /${path}` : "根目录"}
 						</p>
+					</div>
+				)}
+
+				{/* 入队去重提示（同名任务已在队列） */}
+				{uploadHint && (
+					<div className="m-4 flex items-start gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-600 dark:bg-blue-950/40 dark:text-blue-400">
+						<span className="flex-1">{uploadHint}</span>
+						<button
+							type="button"
+							className="shrink-0"
+							onClick={() => setUploadHint("")}
+						>
+							<CloseIcon className="h-4 w-4" />
+						</button>
 					</div>
 				)}
 

@@ -553,9 +553,11 @@ class UploadManager {
   }
 
   // ===== 对外操作 =====
-  enqueue(entries: EnqueueEntry[], opts: EnqueueOptions): number {
+  /** 入队结果：added = 新增任务数；skipped = 被去重跳过的文件名（同名同大小任务已在队列） */
+  enqueue(entries: EnqueueEntry[], opts: EnqueueOptions): { added: number; skipped: string[] } {
     this.ensureInit();
     let added = 0;
+    const skipped: string[] = [];
     for (const entry of entries) {
       if (!entry.file) continue;
       const file = entry.file;
@@ -567,7 +569,7 @@ class UploadManager {
         if (t.meta.uploadPath === uploadPath && t.meta.size === file.size &&
           !["done", "error", "canceled", "waiting-file"].includes(t.meta.status)) { dup = true; break; }
       }
-      if (dup) continue;
+      if (dup) { skipped.push(file.name); continue; }
 
       const mode: "single" | "multipart" | "pool" = opts.pool
         ? "pool"
@@ -600,7 +602,7 @@ class UploadManager {
       added++;
     }
     if (added > 0) { this.persistNow(); this.pump(); this.notify(); }
-    return added;
+    return { added, skipped };
   }
 
   pause(id: string): void {
