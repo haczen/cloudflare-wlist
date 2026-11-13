@@ -130,10 +130,16 @@ export async function action({ request, context }: Route.ActionArgs) {
 	if (action === "init") {
 		const folderId = Number(body.folderId);
 		const name = String(body.name || "").trim();
-		const size = Number(body.size) || 0;
+		const size = Number(body.size) || 0; // 空文件(0 字节)合法，NaN 也归 0
 		const contentType = String(body.contentType || "application/octet-stream");
-		if (!folderId || !name || name.includes("/") || size <= 0) {
-			return Response.json({ error: "参数不合法" }, { status: 400 });
+		if (!folderId || !name || name.includes("/") || size < 0) {
+			// 带原因的报错：下次再出问题能一眼看出是哪个参数
+			const why = !name
+				? "文件名为空"
+				: name.includes("/")
+					? "文件名不能包含 /"
+					: "文件大小不合法";
+			return Response.json({ error: `参数不合法：${why}` }, { status: 400 });
 		}
 		const folder = await getFolderById(db, folderId);
 		if (!folder || folder.mode !== "pool") {

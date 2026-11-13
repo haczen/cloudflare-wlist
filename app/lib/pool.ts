@@ -100,6 +100,7 @@ export function planPoolChunks(
 	memberIds: number[],
 	telegramMemberIds: number[] = []
 ): PoolChunkInfo[] {
+	if (size <= 0) return []; // 空文件：无分片，complete 后即为 0 字节可下载文件
 	const chunkSize = computeChunkSize(size, telegramMemberIds.length > 0);
 	const prefix = folder.storagePath
 		? `${folder.storagePath}/.wlistpool/${fileId}/`
