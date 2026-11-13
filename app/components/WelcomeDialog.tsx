@@ -51,6 +51,10 @@ export default function WelcomeDialog({
 	announcement?: string;
 }) {
 	const [open, setOpen] = useState<boolean>(() => !hasWelcomed());
+	// SSR 读不到 localStorage：首访判定只能在客户端做。
+	// 服务端直接渲染弹窗的话，回访用户会先看到欢迎弹窗、水合后才消失（闪一下）。
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
 
 	const dismiss = (): void => {
 		setOpen(false);
@@ -71,7 +75,7 @@ export default function WelcomeDialog({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [open]);
 
-	if (!open) return null;
+	if (!mounted || !open) return null;
 
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="欢迎">
