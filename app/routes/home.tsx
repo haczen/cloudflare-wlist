@@ -1002,11 +1002,12 @@ function FileBrowser({
 	const openObject = (obj: S3Object) => {
 		if (obj.isDirectory) {
 			navigateTo(normalizeDirPath(obj.key));
-		} else if (obj.pool) {
-			// 聚合盘文件不支持在线预览，直接走下载
-			window.location.href = `/api/pool/${obj.fileId}?download=1`;
 		} else if (isPreviewable(obj.name)) {
+			// 聚合盘文件同样支持在线预览（FilePreview 内部走 /api/pool/:id?inline=1）
 			setPreviewFile(obj);
+		} else if (obj.pool) {
+			// 聚合盘不能预览的类型直接下载（服务端再校验下载权限）
+			window.location.href = `/api/pool/${obj.fileId}?download=1`;
 		} else if (canDownload) {
 			downloadObject(obj);
 		}
@@ -2200,6 +2201,7 @@ function FileBrowser({
 					path={previewFile.key}
 					fileName={previewFile.name}
 					size={previewFile.size}
+					poolFileId={previewFile.pool ? previewFile.fileId : undefined}
 					onClose={() => setPreviewFile(null)}
 				/>
 			)}

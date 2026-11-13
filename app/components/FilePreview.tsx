@@ -25,6 +25,8 @@ export interface FilePreviewProps {
 	size?: number;
 	token?: string;
 	password?: string;
+	/** 聚合盘文件 ID：传入时数据源改走 /api/pool/:id（storageId/path 仅作展示兜底） */
+	poolFileId?: string;
 	onClose: () => void;
 }
 
@@ -81,12 +83,14 @@ function useMediaSrc(
 	proxyUrl: string,
 	enabled: boolean,
 	token?: string,
-	password?: string
+	password?: string,
+	/** 直接使用该 URL 作媒体源（聚合盘：无签名直链，直接用 inline 流） */
+	directSrc?: string | null
 ): { src: string | null; handleError: () => void } {
 	const [signed, setSigned] = useState<string | null>(null);
 	const [failed, setFailed] = useState(false);
 	useEffect(() => {
-		if (!enabled) return;
+		if (!enabled || directSrc) return;
 		let alive = true;
 		const params: Record<string, string> = {
 			action: "signed-url",
@@ -105,9 +109,12 @@ function useMediaSrc(
 		return () => {
 			alive = false;
 		};
-	}, [storageId, path, enabled, token, password]);
+	}, [storageId, path, enabled, token, password, directSrc]);
 
 	// 直链还没回来时返回 null（外层显示加载中）；明确失败则回退代理
+	if (directSrc) {
+		return { src: directSrc, handleError: () => {} };
+	}
 	if (failed) {
 		return { src: proxyUrl, handleError: () => {} };
 	}
@@ -586,6 +593,7 @@ export function FilePreview({
 	size,
 	token,
 	password,
+	poolFileId,
 	onClose,
 }: FilePreviewProps) {
 	const fileType = useMemo(() => getFileType(fileName), [fileName]);
@@ -604,29 +612,40 @@ export function FilePreview({
 		};
 	}, [onClose]);
 
-	const downloadUrl = buildUrl(
-		storageId,
-		path,
-		{ action: "download" },
-		token,
-		password
-	);
-	const inlineUrl = buildUrl(
-		storageId,
-		path,
-		{ action: "download", inline: "1" },
-		token,
-		password
-	);
-	// 媒体类（图/视频/音频/PDF）优先签名直链：视频可用 Range 拖进度、不占 Workers 流量
+	// 聚合盘文件：数据源只有 /api/pool/:id（无签名直链，Worker 流式拼接）
+	const poolDownloadUrl = poolFileId
+		? `/api/pool/${poolFileId}?download=1`
+		: null;
+	const poolInlineUrl = poolFileId ? `/api/pool/${poolFileId}?inline=1` : null;
+	const downloadUrl =
+		poolDownloadUrl ??
+		buildUrl(
+			storageId,
+			path,
+			{ action: "download" },
+			token,
+			password
+		);
+	const inlineUrl =
+		poolInlineUrl ??
+		buildUrl(
+			storageId,
+			path,
+			{ action: "download", inline: "1" },
+			token,
+			password
+		);
+	// 媒体类（图/视频/音频/PDF）优先签名直链：视频可用 Range 拖进度、不占 Workers 流量；
+	// 聚合盘无直链可用，直接用 inline 流（视频不能拖进度，但能顺序播放）
 	const isMediaType = ["image", "video", "audio", "pdf"].includes(currentType);
 	const media = useMediaSrc(
 		storageId,
 		path,
 		inlineUrl,
-		isMediaType,
+		isMediaType && !poolInlineUrl,
 		token,
-		password
+		password,
+		poolInlineUrl
 	);
 
 	const renderContent = () => {

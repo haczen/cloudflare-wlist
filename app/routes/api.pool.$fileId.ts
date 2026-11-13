@@ -1,5 +1,6 @@
 // 聚合盘文件级 API
 // - GET    /api/pool/:fileId?download=1 → 顺序流式聚合下载（chunk 逐个回源拼接）
+// - GET    /api/pool/:fileId?inline=1   → inline 预览流（在线预览用，非 attachment）
 // - GET    /api/pool/:fileId            → 文件信息
 // - POST   /api/pool/:fileId?action=rename  → 重命名（仅改 D1 清单，零数据搬移）
 // - DELETE /api/pool/:fileId            → 删除（各桶批量删 chunk + 清单）
@@ -42,9 +43,10 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 
 	const url = new URL(request.url);
 	const { isAdmin, access } = await resolveAccess(db, request, file);
+	const inline = url.searchParams.get("inline") === "1";
 
 	// 文件信息
-	if (url.searchParams.get("download") !== "1") {
+	if (url.searchParams.get("download") !== "1" && !inline) {
 		if (!isAdmin && !access.list) {
 			return Response.json({ error: "没有浏览权限" }, { status: 403 });
 		}
@@ -60,7 +62,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 		});
 	}
 
-	// 聚合下载：逐 chunk 回源顺序拼接（Range 不支持，整文件下载）
+	// 聚合下载 / 内联预览：逐 chunk 回源顺序拼接（Range 不支持，整文件下载）
 	if (!isAdmin && !access.download) {
 		return Response.json({ error: "没有下载权限" }, { status: 403 });
 	}
@@ -107,11 +109,22 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 	});
 
 	const asciiName = file.name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+	// SVG 是可含脚本的 XML：传输盘访客可匿名上传，inline 直接给等于把任意 JS 送进本站会话。
+	// CSP sandbox 让直接导航时脚本不执行、沦为独立沙箱源；<img> 嵌入展示不受影响（与 api.files 一致）
+	const isSvg =
+		file.contentType.includes("svg") ||
+		file.name.toLowerCase().endsWith(".svg");
 	return new Response(chunkStream, {
 		headers: {
 			"Content-Type": file.contentType || "application/octet-stream",
-			"Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+			"Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
 			"Content-Length": String(file.size),
+			...(isSvg
+				? {
+						"Content-Security-Policy": "sandbox",
+						"X-Content-Type-Options": "nosniff",
+					}
+				: {}),
 		},
 	});
 }
