@@ -729,69 +729,76 @@ function ZipPreview({ url, size }: { url: string; size?: number }) {
 		);
 	}
 
-	// 按目录树展示
+	// 按目录树展示。zip 可以没有显式目录条目（常见：直接打包文件），
+	// 因此目录节点由更深的路径前缀合成虚拟目录，而不是只认显式条目
 	const renderDir = (dirPath: string, depth: number) => {
-		const children = entries.filter((entry) => {
-			if (dirPath) {
-				return (
-					entry.path.startsWith(dirPath) &&
-					entry.path !== dirPath &&
-					!entry.path
-						.slice(dirPath.length)
-						.includes("/")
-				);
+		const prefix = dirPath; // "" 或 "dir1/"（含尾斜杠）
+		const files: typeof entries = [];
+		const dirs = new Set<string>();
+		for (const entry of entries) {
+			if (!entry.path.startsWith(prefix)) continue;
+			const rest = entry.path.slice(prefix.length);
+			if (!rest) continue; // 目录自身
+			const slash = rest.indexOf("/");
+			if (slash === -1) {
+				if (!entry.isDirectory) files.push(entry);
+			} else {
+				dirs.add(rest.slice(0, slash + 1));
 			}
-			return !entry.path.includes("/");
-		});
+		}
+		const dirNames = [...dirs].sort((a, b) => a.localeCompare(b));
+		files.sort((a, b) => a.path.localeCompare(b.path));
 
-		return children.map((entry) => {
-			const isDir = entry.isDirectory || entry.path.endsWith("/");
-			const displayName = entry.path.split("/").filter(Boolean).pop() || "";
-			const fullPath = dirPath ? entry.path : entry.path;
-			if (isDir) {
-				const isOpen = expanded.has(fullPath);
-				return (
-					<div key={fullPath}>
-						<button
-							type="button"
-							className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-							style={{ paddingLeft: `${depth * 16 + 6}px` }}
-							onClick={() => {
-								setExpanded((prev) => {
-									const next = new Set(prev);
-									if (next.has(fullPath)) {
-										next.delete(fullPath);
-									} else {
-										next.add(fullPath);
-									}
-									return next;
-								});
-							}}
-						>
-							<span className="text-xs text-zinc-500">{isOpen ? "▾" : "▸"}</span>
-							<span className="font-medium text-blue-600 dark:text-blue-400">
-								{displayName}/
-							</span>
-						</button>
-						{isOpen && renderDir(fullPath, depth + 1)}
+		return (
+			<>
+				{dirNames.map((dirName) => {
+					const fullPath = prefix + dirName;
+					const isOpen = expanded.has(fullPath);
+					return (
+						<div key={fullPath}>
+							<button
+								type="button"
+								className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+								style={{ paddingLeft: `${depth * 16 + 6}px` }}
+								onClick={() => {
+									setExpanded((prev) => {
+										const next = new Set(prev);
+										if (next.has(fullPath)) {
+											next.delete(fullPath);
+										} else {
+											next.add(fullPath);
+										}
+										return next;
+									});
+								}}
+							>
+								<span className="text-xs text-zinc-500">
+									{isOpen ? "▾" : "▸"}
+								</span>
+								<span className="font-medium text-blue-600 dark:text-blue-400">
+									{dirName}
+								</span>
+							</button>
+							{isOpen && renderDir(fullPath, depth + 1)}
+						</div>
+					);
+				})}
+				{files.map((entry) => (
+					<div
+						key={entry.path}
+						className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+						style={{ paddingLeft: `${depth * 16 + 22}px` }}
+					>
+						<span className="truncate text-zinc-700 dark:text-zinc-300">
+							{entry.path.slice(prefix.length)}
+						</span>
+						<span className="shrink-0 text-xs text-zinc-500">
+							{formatSize(entry.size)}
+						</span>
 					</div>
-				);
-			}
-			return (
-				<div
-					key={fullPath}
-					className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-					style={{ paddingLeft: `${depth * 16 + 22}px` }}
-				>
-					<span className="truncate text-zinc-700 dark:text-zinc-300">
-						{displayName}
-					</span>
-					<span className="shrink-0 text-xs text-zinc-500">
-						{formatSize(entry.size)}
-					</span>
-				</div>
-			);
-		});
+				))}
+			</>
+		);
 	};
 
 	return (
