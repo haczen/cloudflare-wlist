@@ -123,7 +123,7 @@ function ThumbImage({
 		/>
 	);
 }
-import { getFileType, isPreviewable } from "~/lib/file-utils";
+import { getFileType } from "~/lib/file-utils";
 import { apiFileUrl } from "~/lib/api-path";
 import { FilePreview } from "~/components/FilePreview";
 import {
@@ -1002,15 +1002,11 @@ function FileBrowser({
 	const openObject = (obj: S3Object) => {
 		if (obj.isDirectory) {
 			navigateTo(normalizeDirPath(obj.key));
-		} else if (isPreviewable(obj.name)) {
-			// 聚合盘文件同样支持在线预览（FilePreview 内部走 /api/pool/:id?inline=1）
-			setPreviewFile(obj);
-		} else if (obj.pool) {
-			// 聚合盘不能预览的类型直接下载（服务端再校验下载权限）
-			window.location.href = `/api/pool/${obj.fileId}?download=1`;
-		} else if (canDownload) {
-			downloadObject(obj);
+			return;
 		}
+		// 一切文件先开预览：已知类型按类型渲染，未知类型在预览内做内容嗅探
+		// （文本就地显示，二进制给下载引导）——比点击直接下载更可控
+		setPreviewFile(obj);
 	};
 
 	const downloadObject = (obj: S3Object) => {
@@ -1921,7 +1917,7 @@ function FileBrowser({
 									<td className="px-3 py-1.5">
 										<div className="flex items-center justify-end gap-0.5">
 											<div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-												{!obj.isDirectory && isPreviewable(obj.name) && (
+												{!obj.isDirectory && (
 													<button
 														type="button"
 														className="btn-ghost !px-1.5"
@@ -2088,11 +2084,7 @@ function FileBrowser({
 						) : (
 							<EyeIcon className="h-4 w-4" />
 						)}
-						{contextMenu.obj.isDirectory
-							? "打开"
-							: isPreviewable(contextMenu.obj.name)
-								? "预览"
-								: "下载"}
+						{contextMenu.obj.isDirectory ? "打开" : "预览"}
 					</button>
 					{!contextMenu.obj.isDirectory && canDownload && (
 						<button

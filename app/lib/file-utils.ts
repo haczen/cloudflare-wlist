@@ -48,7 +48,7 @@ const IMAGE_EXTENSIONS = [
 	"ico",
 	"avif",
 ];
-const TEXT_EXTENSIONS = ["txt", "log", "rst", "csv", "ini", "cfg", "conf"];
+const TEXT_EXTENSIONS = ["txt", "log", "rst", "csv", "ini", "cfg", "conf", "srt", "vtt", "ass"];
 const MARKDOWN_EXTENSIONS = ["md", "markdown"];
 const CODE_EXTENSIONS = [
 	"js",

@@ -138,26 +138,33 @@ function TextPreview({
 	url,
 	fileName,
 	language,
+	content,
 }: {
-	url: string;
+	url?: string;
 	fileName: string;
 	language?: string;
+	/** 已有内容（内容嗅探通道传入，可跳过再取） */
+	content?: string;
 }) {
-	const [content, setContent] = useState<string | null>(null);
+	const [text, setText] = useState<string | null>(content ?? null);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
+		if (content !== undefined) return;
 		let cancelled = false;
 		(async () => {
 			try {
-				const response = await fetch(url);
-				if (!response.ok) {
-					throw new Error(`加载失败 (${response.status})`);
-				}
-				const text = await response.text();
+				// 只取前 2MB+1：展示本身就是 2MB 截断的，别为预览下载整份大日志
+				const CAP = 2 * 1024 * 1024;
+				if (!url) throw new Error("no url");
+				const { bytes } = await fetchByteRange(url, 0, CAP + 1);
+				const decoded = new TextDecoder().decode(bytes);
 				if (!cancelled) {
-					// 超大文本截断，避免浏览器卡死
-					setContent(text.length > 2 * 1024 * 1024 ? text.slice(0, 2 * 1024 * 1024) + "\n\n… (内容已截断)" : text);
+					setText(
+						bytes.byteLength > CAP
+							? decoded.slice(0, CAP) + "\n\n… (内容已截断)"
+							: decoded
+					);
 				}
 			} catch (err) {
 				if (!cancelled) {
@@ -168,32 +175,33 @@ function TextPreview({
 		return () => {
 			cancelled = true;
 		};
-	}, [url]);
+	}, [url, content]);
 
 	if (error) {
 		return <div className="p-8 text-center text-red-500">{error}</div>;
 	}
-	if (content === null) {
+	if (text === null) {
 		return (
 			<div className="flex items-center justify-center gap-2 p-8 text-zinc-500">
 				<SpinnerIcon className="h-5 w-5 animate-spin" /> 正在加载…
 			</div>
 		);
 	}
+	const content2 = text;
 
 	const lang = language ?? getCodeLanguage(fileName);
 	const isPlainText = lang === "plaintext";
 	let html = "";
 	if (!isPlainText && hljs.getLanguage(lang)) {
 		try {
-			html = hljs.highlight(content, { language: lang }).value;
+			html = hljs.highlight(content2, { language: lang }).value;
 		} catch {
 			html = "";
 		}
 	}
 	if (!html) {
 		const div = document.createElement("div");
-		div.textContent = content;
+		div.textContent = content2;
 		html = div.innerHTML;
 	}
 
@@ -202,6 +210,89 @@ function TextPreview({
 			<pre>
 				<code dangerouslySetInnerHTML={{ __html: html }} />
 			</pre>
+		</div>
+	);
+}
+
+// ---------- 未知类型：头部内容嗅探 ----------
+
+/** 未知扩展名：取头 64KB 试着按文本解码——srt/eml/ini/log 等一切文本都能就地预览 */
+function SniffPreview({
+	url,
+	fileName,
+	downloadUrl,
+}: {
+	url: string;
+	fileName: string;
+	downloadUrl: string;
+}) {
+	const [state, setState] = useState<"sniffing" | "text" | "binary">(
+		"sniffing"
+	);
+	const [content, setContent] = useState<string | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			try {
+				const { bytes } = await fetchByteRange(url, 0, 64 * 1024);
+				let text: string | null = null;
+				try {
+					const decoded = new TextDecoder("utf-8", {
+						fatal: true,
+					}).decode(bytes);
+					// 控制字符（除 \t \n \r）占比 >5% 视为二进制
+					let bad = 0;
+					for (let i = 0; i < decoded.length; i++) {
+						const c = decoded.charCodeAt(i);
+						if (c < 32 && c !== 9 && c !== 10 && c !== 13) bad++;
+					}
+					if (bad / Math.max(1, decoded.length) > 0.05) {
+						throw new Error("binary");
+					}
+					text = decoded;
+				} catch {
+					/* 非 UTF-8 或二进制 */
+				}
+				if (cancelled) return;
+				if (text && text.length > 0) {
+					setContent(text);
+					setState("text");
+				} else {
+					setState("binary");
+				}
+			} catch {
+				if (!cancelled) setState("binary");
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [url]);
+
+	if (state === "sniffing") {
+		return (
+			<div className="flex items-center justify-center gap-2 p-8 text-zinc-500">
+				<SpinnerIcon className="h-5 w-5 animate-spin" /> 正在识别文件…
+			</div>
+		);
+	}
+	if (state === "text" && content !== null) {
+		return <TextPreview content={content} fileName={fileName} language="plaintext" />;
+	}
+	return (
+		<div className="flex flex-col items-center gap-4 p-10 text-center">
+			<div className="text-5xl opacity-40">📄</div>
+			<div>
+				<p className="text-sm text-zinc-500">二进制文件，暂不支持在线预览</p>
+				<p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+					文本 / 图片 / 音视频 / PDF / Office / zip 均可在线预览
+				</p>
+			</div>
+			<a href={downloadUrl} download={fileName} className="btn-primary !py-1.5 !text-xs">
+				<DownloadIcon className="h-4 w-4" />
+				下载查看
+			</a>
 		</div>
 	);
 }
@@ -416,14 +507,165 @@ interface ZipEntry {
 	size: number;
 }
 
-function ZipPreview({ url }: { url: string }) {
+/** 按字节窗口读取：源支持 Range 时直接取窗口；不支持时读满即断流（仅 start=0 时内容正确） */
+async function fetchByteRange(
+	url: string,
+	start: number,
+	length?: number
+): Promise<{ bytes: Uint8Array; absStart: number; honored: boolean }> {
+	const rangeValue =
+		length !== undefined
+			? `bytes=${start}-${start + length - 1}`
+			: `bytes=${start}-`;
+	const res = await fetch(url, { headers: { Range: rangeValue } });
+	if (!res.ok) {
+		throw new Error(`加载失败 (${res.status})`);
+	}
+	if (res.status === 206) {
+		const contentRange = res.headers.get("Content-Range");
+		const matched = contentRange ? /bytes (\d+)-/.exec(contentRange) : null;
+		return {
+			bytes: new Uint8Array(await res.arrayBuffer()),
+			absStart: matched ? Number(matched[1]) : start,
+			honored: true,
+		};
+	}
+	// 200：源忽略了 Range。start=0 时读满 length 即断流（内容正确）；其他 start 无效
+	if (start !== 0 || !res.body) {
+		return { bytes: new Uint8Array(0), absStart: start, honored: false };
+	}
+	const capped =
+		length !== undefined
+			? length
+			: Number(res.headers.get("Content-Length") || 0) || Number.MAX_SAFE_INTEGER;
+	const reader = res.body.getReader();
+	const parts: Uint8Array[] = [];
+	let got = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done || !value) break;
+		parts.push(value);
+		got += value.byteLength;
+		if (got >= capped) {
+			await reader.cancel();
+			break;
+		}
+	}
+	const out = new Uint8Array(Math.min(got, capped));
+	let offset = 0;
+	for (const part of parts) {
+		const take = Math.min(part.byteLength, out.byteLength - offset);
+		out.set(part.subarray(0, take), offset);
+		offset += take;
+		if (offset >= out.byteLength) break;
+	}
+	return { bytes: out, absStart: 0, honored: false };
+}
+
+const EOCD_SIG = 0x06054b50;
+const CEN_SIG = 0x02014b50;
+/** EOCD 固定 22 字节、后最多跟 64KB 注释——从尾部倒着扫 */
+function findEocdOffset(bytes: Uint8Array): number {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const min = Math.max(0, bytes.byteLength - 22 - 65535);
+	for (let i = bytes.byteLength - 22; i >= min; i--) {
+		if (view.getUint32(i, true) === EOCD_SIG) return i;
+	}
+	return -1;
+}
+
+/** 解析 central directory：ZIP 目录索引（文件名/大小/是否目录），字段布局固定 */
+function parseCentralDirectory(cd: Uint8Array): ZipEntry[] {
+	const view = new DataView(cd.buffer, cd.byteOffset, cd.byteLength);
+	const entries: ZipEntry[] = [];
+	let p = 0;
+	while (p + 46 <= cd.byteLength) {
+		if (view.getUint32(p, true) !== CEN_SIG) break;
+		const flags = view.getUint16(p + 8, true);
+		const uncompSize = view.getUint32(p + 24, true);
+		const nameLen = view.getUint16(p + 28, true);
+		const extraLen = view.getUint16(p + 30, true);
+		const commentLen = view.getUint16(p + 32, true);
+		if (p + 46 + nameLen > cd.byteLength) break;
+		const nameBytes = cd.subarray(p + 46, p + 46 + nameLen);
+		// bit11 = UTF-8 文件名；未置位时按 ZIP 规范是 cp437，windows-1252 近似解码即可读
+		let path: string;
+		try {
+			path = new TextDecoder((flags & 0x800) !== 0 ? "utf-8" : "windows-1252").decode(
+				nameBytes
+			);
+		} catch {
+			path = String.fromCharCode(...nameBytes);
+		}
+		entries.push({ path, isDirectory: path.endsWith("/"), size: uncompSize });
+		p += 46 + nameLen + extraLen + commentLen;
+	}
+	return entries;
+}
+
+function ZipPreview({ url, size }: { url: string; size?: number }) {
 	const [entries, setEntries] = useState<ZipEntry[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [notZip, setNotZip] = useState(false);
 	const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
 
 	useEffect(() => {
 		let cancelled = false;
+		setEntries(null);
+		setError(null);
+		setNotZip(false);
 		(async () => {
+			// 快路径：ZIP 的目录索引在文件尾部，Range 只取末尾 66KB 即可列出内容
+			if (size !== undefined && size > 0) {
+				try {
+					const tailStart = Math.max(0, size - 66000);
+					const tail = await fetchByteRange(url, tailStart);
+					if (tail.honored && !cancelled) {
+						const eocd = findEocdOffset(tail.bytes);
+						if (eocd === -1) {
+							// 尾部没有 EOCD：rar/7z/tar 等非 zip 压缩格式
+							setNotZip(true);
+							return;
+						}
+						const view = new DataView(
+							tail.bytes.buffer,
+							tail.bytes.byteOffset,
+							tail.bytes.byteLength
+						);
+						const totalEntries = view.getUint16(eocd + 10, true);
+						const cdSize = view.getUint32(eocd + 12, true);
+						const cdOffset = view.getUint32(eocd + 16, true);
+						if (totalEntries !== 0xffff && cdOffset !== 0xffffffff) {
+							let cdBytes: Uint8Array;
+							if (cdOffset >= tail.absStart) {
+								// 目录索引已在取回的尾部窗口里
+								cdBytes = tail.bytes.subarray(
+									cdOffset - tail.absStart,
+									cdOffset - tail.absStart + cdSize
+								);
+							} else {
+								const cd = await fetchByteRange(url, cdOffset, cdSize);
+								if (!cd.honored) {
+									throw new Error("range-miss");
+								}
+								cdBytes = cd.bytes;
+							}
+							if (cancelled) return;
+							const list = parseCentralDirectory(cdBytes);
+							if (list.length > 0 || totalEntries === 0) {
+								list.sort((a, b) => a.path.localeCompare(b.path));
+								setEntries(list);
+								return;
+							}
+						}
+						// zip64 / 解析异常：落到慢路径
+					}
+				} catch {
+					/* 快路径失败 → 慢路径兜底 */
+				}
+			}
+			if (cancelled) return;
+			// 慢路径：整包下载 + jszip（源不支持 Range，或 zip64 等异常结构）
 			try {
 				const response = await fetch(url);
 				if (!response.ok) {
@@ -438,7 +680,8 @@ function ZipPreview({ url }: { url: string }) {
 					list.push({
 						path,
 						isDirectory: file.dir,
-						size: (file as any)._data?.uncompressedSize || 0,
+						size: (file as unknown as { _data?: { uncompressedSize?: number } })._data
+							?.uncompressedSize || 0,
 					});
 				});
 				list.sort((a, b) => a.path.localeCompare(b.path));
@@ -456,10 +699,27 @@ function ZipPreview({ url }: { url: string }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [url]);
+	}, [url, size]);
 
 	if (error) {
-		return <div className="p-8 text-center text-red-500">{error}</div>;
+		return (
+			<div className="flex flex-col items-center gap-3 p-8 text-center">
+				<p className="text-sm text-red-500">{error}</p>
+				<p className="text-xs text-zinc-500">
+					仅支持 zip 格式在线列出；rar / 7z / tar 请下载后查看
+				</p>
+			</div>
+		);
+	}
+	if (notZip) {
+		return (
+			<div className="flex flex-col items-center gap-3 p-10 text-center">
+				<div className="text-5xl opacity-40">🗜️</div>
+				<p className="text-sm text-zinc-500">
+					该压缩格式暂不支持在线列出（目前支持 zip），请下载后查看
+				</p>
+			</div>
+		);
 	}
 	if (entries === null) {
 		return (
@@ -707,15 +967,14 @@ export function FilePreview({
 			case "xlsx":
 				return <SheetPreview url={inlineUrl} fileName={fileName} />;
 			case "archive":
-				return <ZipPreview url={inlineUrl} />;
+				return <ZipPreview url={inlineUrl} size={size} />;
 			default:
 				return (
-					<div className="flex flex-col items-center gap-3 p-10 text-center">
-						<div className="text-5xl opacity-40">📄</div>
-						<p className="text-sm text-zinc-500">
-							该文件类型暂不支持在线预览，请下载后查看
-						</p>
-					</div>
+					<SniffPreview
+						url={inlineUrl}
+						fileName={fileName}
+						downloadUrl={downloadUrl}
+					/>
 				);
 		}
 	};

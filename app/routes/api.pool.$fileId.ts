@@ -62,9 +62,38 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 		});
 	}
 
-	// 聚合下载 / 内联预览：逐 chunk 回源顺序拼接（Range 不支持，整文件下载）
+	// 聚合下载 / 内联预览：逐 chunk 回源顺序拼接。
+	// 支持 Range（单区间）：<video> 拖动进度、zip 预览只取尾部目录都靠它——
+	// 区间按 chunk.start/size 映射到对应分片，能 Range 的存储只取片内窗口，
+	// 不支持 Range 的存储（TG/WebDAV/Onedrive…）流式跳过前缀后截取。
 	if (!isAdmin && !access.download) {
 		return Response.json({ error: "没有下载权限" }, { status: 403 });
+	}
+
+	const rangeHeader = request.headers.get("Range");
+	const rangeMatch =
+		rangeHeader && !rangeHeader.includes(",")
+			? /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
+			: null;
+	let range: { start: number; end: number } | null = null;
+	if (rangeMatch && file.size > 0) {
+		let start: number;
+		let end: number;
+		if (rangeMatch[1] === "" && rangeMatch[2] !== "") {
+			// 后缀区间 bytes=-N
+			start = Math.max(0, file.size - Number(rangeMatch[2]));
+			end = file.size - 1;
+		} else {
+			start = Number(rangeMatch[1]);
+			end = rangeMatch[2] === "" ? file.size - 1 : Math.min(Number(rangeMatch[2]), file.size - 1);
+		}
+		if (Number.isNaN(start) || Number.isNaN(end) || start > end || end < 0) {
+			return new Response("Range Not Satisfiable", {
+				status: 416,
+				headers: { "Content-Range": `bytes */${file.size}` },
+			});
+		}
+		range = { start, end };
 	}
 
 	const meta = getRequestMeta(request);
@@ -79,23 +108,65 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 
 	const chunkStream = new ReadableStream<Uint8Array>({
 		async start(controller) {
+			let readerClosedEarly = false;
 			try {
 				for (const chunk of file.chunks) {
+					const chunkStart = chunk.start;
+					const chunkEnd = chunk.start + chunk.size - 1; // 含端
+					if (range && (chunkEnd < range.start || chunkStart > range.end)) {
+						continue; // 与请求区间不相交的分片直接跳过（不回源）
+					}
+					const readStart = range ? Math.max(chunkStart, range.start) : chunkStart;
+					const readEnd = range ? Math.min(chunkEnd, range.end) : chunkEnd;
 					const storage = await getStorageById(db, chunk.storageId);
 					if (!storage) {
 						throw new Error(`分片 ${chunk.i} 所在桶不存在`);
 					}
 					const client = createClient(storage, db, storage.id);
-					const resp = await client.getObject(chunk.key);
+					const need = readEnd - readStart + 1;
+					const resp = await client.getObject(
+						chunk.key,
+						`bytes=${readStart - chunkStart}-${readEnd - chunkStart}`
+					);
 					if (!resp.ok || !resp.body) {
 						throw new Error(`分片 ${chunk.i} 读取失败: ${resp.status}`);
 					}
-					const reader = resp.body.getReader();
-					for (;;) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						if (value) controller.enqueue(value);
+					if (resp.status === 206 && resp.body) {
+						// 存储端已按区间返回，直接透传
+						const reader = resp.body.getReader();
+						for (;;) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							if (value) controller.enqueue(value);
+						}
+					} else {
+						// 存储端忽略 Range（TG/WebDAV 等）：整片流回来，跳过前缀再截 need 字节
+						const reader = resp.body.getReader();
+						let toSkip = readStart - chunkStart;
+						let taken = 0;
+						for (;;) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							let buf = value;
+							if (toSkip > 0 && buf) {
+								const skip = Math.min(toSkip, buf.byteLength);
+								buf = buf.subarray(skip);
+								toSkip -= skip;
+							}
+							if (buf && taken < need) {
+								const take = Math.min(need - taken, buf.byteLength);
+								controller.enqueue(buf.subarray(0, take));
+								taken += take;
+							}
+							if (taken >= need && range) {
+								// 已取满请求区间，剩余分片也无需回源
+								await reader.cancel();
+								readerClosedEarly = true;
+								break;
+							}
+						}
 					}
+					if (readerClosedEarly) break;
 				}
 				controller.close();
 			} catch (err) {
@@ -115,10 +186,17 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 		file.contentType.includes("svg") ||
 		file.name.toLowerCase().endsWith(".svg");
 	return new Response(chunkStream, {
+		status: range ? 206 : 200,
 		headers: {
 			"Content-Type": file.contentType || "application/octet-stream",
 			"Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
-			"Content-Length": String(file.size),
+			"Accept-Ranges": "bytes",
+			...(range
+				? {
+						"Content-Range": `bytes ${range.start}-${range.end}/${file.size}`,
+						"Content-Length": String(range.end - range.start + 1),
+					}
+				: { "Content-Length": String(file.size) }),
 			...(isSvg
 				? {
 						"Content-Security-Policy": "sandbox",
