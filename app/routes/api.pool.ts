@@ -18,7 +18,7 @@ import {
 	cleanExpiredPoolFiles,
 	groupChunksByStorage,
 } from "~/lib/pool";
-import { createClient } from "~/lib/client-factory";
+import { createClient, withClientState } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
 import { TG_POOL_CHUNK_SIZE } from "~/lib/telegram-client";
 
@@ -99,10 +99,16 @@ export async function action({ request, context }: Route.ActionArgs) {
 	const { user, isAdmin } = await requireAuth(request, db);
 
 	// 上传类操作要求目录上传权限（含公开目录的访客上传）
-	if (action === "init" || action === "chunk-url" || action === "complete") {
-		const fileId = action === "init" ? null : String(body.fileId || "");
+	if (
+		action === "init" ||
+		action === "text" ||
+		action === "chunk-url" ||
+		action === "complete"
+	) {
+		const fileId =
+			action === "init" || action === "text" ? null : String(body.fileId || "");
 		let folderId: number | null = null;
-		if (action === "init") {
+		if (action === "init" || action === "text") {
 			folderId = Number(body.folderId) || null;
 		} else {
 			const pf = fileId ? await getPoolFile(db, fileId) : null;
@@ -156,10 +162,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 		const tgIds = allStorages.filter((s) => s.type === "telegram").map((s) => s.id);
 		const tgSafeMax =
 			Math.floor((46 * anyIds.length) / (anyIds.length + 1)) * TG_POOL_CHUNK_SIZE;
-		// TG 仅限登录用户勾选（访客往别人 TG 收藏夹塞文件没有意义，客户端也不给这个选项）
+		// TG 仅限管理员勾选（管理员专属通道；普通用户/访客一律云桶平分）
 		const wantTg =
 			body.includeTelegram === true &&
-			!!user &&
+			isAdmin &&
 			tgIds.length > 0 &&
 			size <= tgSafeMax; // 超线自动只用云桶（分布见文件列表的桶徽章）
 		const members = resolvePoolMembers(folder, wantTg ? anyIds : s3Ids);
@@ -192,6 +198,73 @@ export async function action({ request, context }: Route.ActionArgs) {
 				chunks: file.chunks,
 			},
 		});
+	}
+
+	if (action === "text") {
+		// 在线新建文本文件（编辑器直存聚合盘）：内容走 JSON body，服务端落片 + complete。
+		// 容量上限 2MB —— 低于最小分片 256MB，恒为 1 片（无需 multipart 多片切片）。
+		const folderId = Number(body.folderId);
+		const name = String(body.name || "").trim();
+		const content = typeof body.content === "string" ? body.content : "";
+		const contentType =
+			String(body.contentType || "text/plain") || "text/plain";
+		// 分片按字节算：多字节字符必须先编码再取长度，否则清单 size 与实际不符
+		const bytes = new TextEncoder().encode(content);
+		const size = bytes.byteLength;
+		const MAX = 2 * 1024 * 1024;
+		if (!folderId || !name || name.includes("/") || size > MAX) {
+			const why = !name
+				? "文件名为空"
+				: name.includes("/")
+					? "文件名不能包含 /"
+					: `内容超过 ${MAX / 1024 / 1024}MB 上限`;
+			return Response.json({ error: `参数不合法：${why}` }, { status: 400 });
+		}
+		const folder = await getFolderById(db, folderId);
+		if (!folder || folder.mode !== "pool") {
+			return Response.json({ error: "不是聚合盘目录" }, { status: 400 });
+		}
+		const allStorages = await getAllStorages(db);
+		// 文本不进 TG：小文件占收藏夹没有意义，云桶平分即可
+		const s3Ids = allStorages.filter((s) => s.type === "s3").map((s) => s.id);
+		const members = resolvePoolMembers(folder, s3Ids);
+		if (members.length === 0) {
+			return Response.json({ error: "没有可用的存储桶" }, { status: 400 });
+		}
+		const file = await createPoolFile(
+			db,
+			folder,
+			name,
+			size,
+			contentType,
+			members,
+			[]
+		);
+		if (file.chunks.length === 1) {
+			// 单片：bytes.buffer 就是全部内容（TextEncoder 产出的 buffer 恰好贴合）
+			const chunk = file.chunks[0];
+			const storage = await getStorageById(db, chunk.storageId);
+			if (!storage) {
+				throw new Error("分片所在桶不存在");
+			}
+			const client = createClient(storage, db, storage.id);
+			await withClientState(client, db, chunk.storageId, () =>
+				client.putObject(chunk.key, bytes.buffer as ArrayBuffer, contentType)
+			);
+		} else if (file.chunks.length > 1) {
+			// 理论到不了（2MB < 256MB 最小分片），防御性兜底
+			throw new Error("文本内容超出单片范围");
+		}
+		await completePoolFile(db, file.id);
+		await logAudit(db, {
+			action: "pool.text",
+			userType: isAdmin ? "admin" : user ? "user" : "guest",
+			ip: meta.ip,
+			userAgent: meta.userAgent,
+			path: `${folder.storagePath}/${name}`,
+			detail: { fileId: file.id, size },
+		});
+		return Response.json({ success: true, fileId: file.id });
 	}
 
 	if (action === "chunk-url") {

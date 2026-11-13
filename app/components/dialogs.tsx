@@ -890,6 +890,7 @@ export function TextEditorDialog({
 	storageId,
 	storageName,
 	currentDir,
+	poolFolderId,
 	storageOptions,
 	existingPath,
 	existingName,
@@ -900,6 +901,8 @@ export function TextEditorDialog({
 	storageId: number;
 	storageName: string;
 	currentDir: string;
+	/** 聚合盘目录 ID：传入时新建走 /api/pool?action=text（服务端落片），不走桶直存 */
+	poolFolderId?: number;
 	/** 可保存到的桶列表（当前桶默认选中） */
 	storageOptions: StorageOption[];
 	/** 编辑已有文件时的完整 key；新建时为空 */
@@ -963,14 +966,36 @@ export function TextEditorDialog({
 		setSaving(true);
 		setError(null);
 		try {
-			// 新建时按用户选择的桶/目录保存；编辑时覆盖原路径
-			const cleanDir = targetDir.replace(/^\/+|\/+$/g, "");
-			const saveTo = isEdit ? existingPath! : cleanDir ? `${cleanDir}/${name}` : name;
 			const extension = name.toLowerCase().split(".").pop() || "";
 			const contentType =
 				extension === "md" || extension === "markdown"
 					? "text/markdown; charset=utf-8"
 					: "text/plain; charset=utf-8";
+			// 聚合盘目录：内容一处 JSON 落库/落片由服务端完成（分布自动云桶平分）
+			if (!isEdit && poolFolderId) {
+				const response = await fetch("/api/pool?action=text", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						folderId: poolFolderId,
+						name,
+						content,
+						contentType,
+					}),
+				});
+				if (!response.ok) {
+					const data = (await response.json().catch(() => ({}))) as {
+						error?: string;
+					};
+					throw new Error(data.error || "保存失败");
+				}
+				onSaved(storageId);
+				onClose();
+				return;
+			}
+			// 新建时按用户选择的桶/目录保存；编辑时覆盖原路径
+			const cleanDir = targetDir.replace(/^\/+|\/+$/g, "");
+			const saveTo = isEdit ? existingPath! : cleanDir ? `${cleanDir}/${name}` : name;
 			const response = await fetch(
 				`/api/files/${targetStorageId}/${saveTo
 					.split("/")
@@ -1028,6 +1053,10 @@ export function TextEditorDialog({
 					<p className="text-xs text-zinc-500">
 						{storageName} / {existingPath}
 						（保存将覆盖原文件）
+					</p>
+				) : poolFolderId ? (
+					<p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300">
+						📦 保存到聚合盘（{storageName}）：分片自动平分到云桶，创建后即出现在目录列表
 					</p>
 				) : (
 					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

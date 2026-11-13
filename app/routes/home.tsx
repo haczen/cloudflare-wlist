@@ -1530,7 +1530,7 @@ function FileBrowser({
 						</button>
 					</>
 				)}
-				{canUpload && folderMode === "normal" && (
+				{canUpload && (
 					<button
 						type="button"
 						className="btn-outline !px-2 !text-xs"
@@ -2119,6 +2119,7 @@ function FileBrowser({
 					{canManage && (
 						<>
 							{!contextMenu.obj.isDirectory &&
+								!contextMenu.obj.pool &&
 								["text", "code", "markdown"].includes(
 									getFileType(contextMenu.obj.name)
 								) && (
@@ -2234,6 +2235,11 @@ function FileBrowser({
 					storageId={storage.id}
 					storageName={rootLabel}
 					currentDir={path}
+					poolFolderId={
+						folderMode === "pool" && currentFolderId !== null
+							? currentFolderId
+							: undefined
+					}
 					storageOptions={
 						isAdmin && storageOptions.length > 0
 							? storageOptions
@@ -2617,9 +2623,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 		? storages.map((s) => ({ id: s.id, name: s.name }))
 		: [];
 
-	// 聚合盘上传可选「包含 Telegram」：需配置了 TG 盘，且仅登录用户（访客默认云桶平分）
+	// 聚合盘上传可选「包含 Telegram」：管理员专属（普通用户/访客一律云桶平分）
 	const tgPoolOption =
-		storages.some((s) => s.type === "telegram") && (isAdmin || !!user);
+		storages.some((s) => s.type === "telegram") && isAdmin;
 
 	// 公告关闭状态（记录已读文本，公告变更后重新显示）
 	const [announcementDismissed, setAnnouncementDismissed] = useState("");
