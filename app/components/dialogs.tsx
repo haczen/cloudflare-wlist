@@ -1138,6 +1138,7 @@ export function NewFolderDialog({
 	currentFolderId,
 	currentFolderName,
 	storageOptions,
+	defaultMode = "all",
 	onCreated,
 	onClose,
 }: {
@@ -1146,6 +1147,8 @@ export function NewFolderDialog({
 	currentFolderId: number | null;
 	currentFolderName: string;
 	storageOptions: StorageOption[];
+	/** 初始存储方式（顶层新建普通目录入口传 "single"） */
+	defaultMode?: "all" | "some" | "single";
 	onCreated: () => void;
 	onClose: () => void;
 }) {
@@ -1155,8 +1158,8 @@ export function NewFolderDialog({
 		storageOptions[0]?.id || 0
 	);
 	const [isPublic, setIsPublic] = useState(false);
-	// 存储方式三选一：平分全部盘（默认）/ 指定几个盘平分 / 只存到一个盘
-	const [mode, setMode] = useState<"all" | "some" | "single">("all");
+	// 存储方式三选一：平分全部盘 / 指定几个盘平分 / 只存到一个盘
+	const [mode, setMode] = useState<"all" | "some" | "single">(defaultMode);
 	const [poolMembers, setPoolMembers] = useState<number[]>(
 		storageOptions.map((s) => s.id)
 	);

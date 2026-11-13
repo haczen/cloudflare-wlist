@@ -2540,6 +2540,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 	const [statsStorage, setStatsStorage] = useState<StorageInfo | null>(null);
 	/** 正在编辑的目录（盘）：改名 / 公开 / 访客上传 / 成员桶 */
 	const [editingFolder, setEditingFolder] = useState<EditableFolder | null>(null);
+	/** 新建顶层目录（与「资源存储」平级）：侧边栏「目录」+ 按钮 */
+	const [showTopFolder, setShowTopFolder] = useState(false);
 
 	// GitHub 登录失败提示（回调带回的 ?github_error=）
 	const [githubError, setGithubError] = useState("");
@@ -2678,9 +2680,21 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
 				{/* 目录树（主内容）+ 管理员的存储后端 */}
 				<nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-2">
-					<p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-						目录
-					</p>
+					<div className="flex items-center justify-between">
+						<p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+							目录
+						</p>
+						{isAdmin && (
+							<button
+								type="button"
+								className="mr-1 rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+								title="新建顶层目录（与下方目录平级）"
+								onClick={() => setShowTopFolder(true)}
+							>
+								<FolderPlusIcon className="h-4 w-4" />
+							</button>
+						)}
+					</div>
 					{folders.length === 0 && (
 						<p className="px-2 py-6 text-center text-xs leading-relaxed text-zinc-500">
 							{isAdmin
@@ -2974,6 +2988,20 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 					storageOptions={storages.map((s) => ({ id: s.id, name: s.name }))}
 					onUpdated={refreshStorages}
 					onClose={() => setEditingFolder(null)}
+				/>
+			)}
+
+			{/* 新建顶层目录（侧边栏「目录」+ 按钮） */}
+			{showTopFolder && isAdmin && (
+				<NewFolderDialog
+					isAdmin={isAdmin}
+					currentFolderId={null}
+					currentFolderName=""
+					storageOptions={storages.map((s) => ({ id: s.id, name: s.name }))}
+					// 顶层新建像「资源存储」那样的普通目录默认单盘；要聚合盘自己再选
+					defaultMode="single"
+					onCreated={refreshStorages}
+					onClose={() => setShowTopFolder(false)}
 				/>
 			)}
 
