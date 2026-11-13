@@ -2632,15 +2632,21 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 	const tgPoolOption =
 		storages.some((s) => s.type === "telegram") && isAdmin;
 
-	// 公告关闭状态（记录已读文本，公告变更后重新显示）
-	const [announcementDismissed, setAnnouncementDismissed] = useState("");
+	// 公告关闭状态（记录已读文本，公告变更后重新显示）。
+	// null = 客户端还没读到 localStorage：SSR 渲染不了它，此时先不展示，
+	// 否则已关闭过的用户会先看到公告、水合后再消失（「闪一秒就没」）。
+	const [announcementDismissed, setAnnouncementDismissed] = useState<
+		string | null
+	>(null);
 	useEffect(() => {
 		setAnnouncementDismissed(
 			localStorage.getItem("wlist-announcement-dismissed") || ""
 		);
 	}, []);
 	const showAnnouncement =
-		!!siteAnnouncement && announcementDismissed !== siteAnnouncement;
+		!!siteAnnouncement &&
+		announcementDismissed !== null &&
+		announcementDismissed !== siteAnnouncement;
 
 	const handleLogout = async () => {
 		await fetch("/api/storages", {
