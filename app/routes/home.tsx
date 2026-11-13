@@ -564,6 +564,7 @@ function FileBrowser({
 	currentFolderId,
 	folderAccess,
 	folderMode,
+	isTransferDisk,
 	tgPoolOption,
 	storageOptions,
 	onFoldersChanged,
@@ -581,6 +582,8 @@ function FileBrowser({
 	folderAccess: { list: boolean; download: boolean; upload: boolean };
 	/** 聚合盘目录：列表/上传/下载/删除全部走聚合通道 */
 	folderMode: "normal" | "pool";
+	/** 传输盘（pool + 公开 + 访客可传）：只有这类目录展示「公共传输盘」横幅并参与 7 天保留 */
+	isTransferDisk: boolean;
 	/** 聚合盘上传时可勾选「包含 Telegram」（已配置 TG 盘且已登录；访客为 false） */
 	tgPoolOption: boolean;
 	/** 当前用户可上传的桶（供"新建文件"对话框选择目标） */
@@ -1643,8 +1646,8 @@ function FileBrowser({
 				</div>
 			)}
 
-			{/* 传输盘介绍横幅（聚合盘目录专用） */}
-			{folderMode === "pool" && (
+			{/* 传输盘介绍横幅（仅 pool + 公开 + 访客可传的传输盘；私有聚合盘不显示） */}
+			{folderMode === "pool" && isTransferDisk && (
 				<div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50 via-violet-50 to-pink-50 px-4 py-3 dark:border-indigo-900/60 dark:from-indigo-950/40 dark:via-violet-950/30 dark:to-pink-950/30">
 					<div className="flex items-start gap-3">
 						<span className="mt-0.5 text-2xl" aria-hidden>
@@ -2943,6 +2946,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 							}
 						}
 						folderMode={currentFolder?.mode === "pool" ? "pool" : "normal"}
+						isTransferDisk={
+							currentFolder?.mode === "pool" &&
+							!!currentFolder.isPublic &&
+							!!currentFolder.guestUpload
+						}
 						tgPoolOption={tgPoolOption}
 						storageOptions={uploadableStorages}
 						onFoldersChanged={refreshStorages}

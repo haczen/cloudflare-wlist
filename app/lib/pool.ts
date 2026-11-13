@@ -275,14 +275,18 @@ export async function deletePoolChunks(
 }
 
 /**
- * 清理超过保留期的聚合文件（含分片对象与 D1 清单）。
+ * 清理超过保留期的传输盘文件（含分片对象与 D1 清单）。
+ * 仅作用于传输盘（mode=pool 且公开且允许访客上传）——私有聚合盘是永久存储，不参与 7 天轮转，
+ * 与 home.tsx 传输盘横幅的显示条件保持一致（横幅承诺了 7 天保留的目录才会被清理）。
  * created_at 是 datetime('now') 空格格式，SQL 端同格式比较，无时区问题。
  * 返回清理的文件数。由目录访问时惰性触发 + 每日 Cron 兜底。
  */
 export async function cleanExpiredPoolFiles(db: D1Database): Promise<number> {
 	const result = await db
 		.prepare(
-			`SELECT * FROM pool_files WHERE created_at < datetime('now', ?)`
+			`SELECT p.* FROM pool_files p JOIN folders f ON f.id = p.folder_id
+			 WHERE f.mode = 'pool' AND f.is_public = 1 AND f.guest_upload = 1
+			   AND p.created_at < datetime('now', ?)`
 		)
 		.bind(`-${POOL_RETENTION_DAYS} days`)
 		.all<PoolFileRow>();
