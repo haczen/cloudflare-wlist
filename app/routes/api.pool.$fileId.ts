@@ -19,14 +19,19 @@ import {
 import { createClient, withClientState } from "~/lib/client-factory";
 import { getRequestMeta, logAudit } from "~/lib/audit";
 
-async function resolveAccess(db: D1Database, request: Request, file: PoolFile) {
+async function resolveAccess(
+	db: D1Database,
+	request: Request,
+	file: PoolFile
+) {
 	const { user, isAdmin } = await requireAuth(request, db);
-	if (isAdmin) return { isAdmin, access: { list: true, download: true, upload: true } };
+	if (isAdmin) return { user, isAdmin, access: { list: true, download: true, upload: true } };
 	const folder = await getFolderById(db, file.folderId);
-	if (!folder) return { isAdmin, access: { list: false, download: false, upload: false } };
+	if (!folder) return { user, isAdmin, access: { list: false, download: false, upload: false } };
 	const all = await getAllFolders(db);
 	const assigned = user ? await getUserFolders(db, user.id) : [];
 	return {
+		user,
 		isAdmin,
 		access: computeFolderAccess(all, assigned, folder.storageId, folder.storagePath),
 	};
@@ -218,12 +223,23 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 	}
 	const url = new URL(request.url);
 	const action = url.searchParams.get("action");
-	const { isAdmin, access } = await resolveAccess(db, request, file);
+	const { user, isAdmin, access } = await resolveAccess(db, request, file);
 
 	if (request.method === "DELETE") {
-		// 删除权限：与目录上传权限对齐（聚合盘公开目录允许访客清理，传输盘用后即删）
-		if (!isAdmin && !access.upload) {
-			return Response.json({ error: "没有删除权限" }, { status: 403 });
+		// 删除权限（所有权制）：管理员全通；登录用户只能删自己上传的文件
+		// （且仍需保有目录上传权限，防止被移出目录后继续删旧文件）；
+		// 访客不能删任何人的文件 —— 传输盘/聚合盘从「有上传权就能删」收紧。
+		// 访客上传与迁移前旧数据 uploader_id 为 NULL，同样只有管理员能删。
+		if (!isAdmin) {
+			if (!user) {
+				return Response.json({ error: "游客不能删除文件，请登录后删除自己上传的文件" }, { status: 403 });
+			}
+			if (file.uploaderId !== user.id) {
+				return Response.json({ error: "只能删除自己上传的文件" }, { status: 403 });
+			}
+			if (!access.upload) {
+				return Response.json({ error: "没有删除权限" }, { status: 403 });
+			}
 		}
 
 		// 各桶批量删 chunk
@@ -264,9 +280,18 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 	}
 
 	if (request.method === "POST" && action === "rename") {
-		// 重命名：仅改 D1 清单，零数据搬移
-		if (!isAdmin && !access.upload) {
-			return Response.json({ error: "没有权限" }, { status: 403 });
+		// 重命名：仅改 D1 清单，零数据搬移。权限与删除同一套所有权制 ——
+		// 改别人文件的名字同样是破坏行为，不能比删除更宽松
+		if (!isAdmin) {
+			if (!user) {
+				return Response.json({ error: "游客不能重命名文件，请登录后操作自己上传的文件" }, { status: 403 });
+			}
+			if (file.uploaderId !== user.id) {
+				return Response.json({ error: "只能重命名自己上传的文件" }, { status: 403 });
+			}
+			if (!access.upload) {
+				return Response.json({ error: "没有权限" }, { status: 403 });
+			}
 		}
 		const body = (await request.json().catch(() => ({}))) as { name?: string };
 		const name = String(body.name || "").trim();

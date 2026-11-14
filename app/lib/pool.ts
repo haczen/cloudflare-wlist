@@ -30,6 +30,8 @@ export interface PoolFile {
 	status: "uploading" | "ready";
 	chunks: PoolChunkInfo[];
 	createdAt: string;
+	/** 上传者用户 id：null = 访客上传或旧数据。删除/重命名的所有权校验依据 */
+	uploaderId: number | null;
 }
 
 interface PoolFileRow {
@@ -42,6 +44,7 @@ interface PoolFileRow {
 	status: string;
 	chunks: string;
 	created_at: string;
+	uploader_id: number | null;
 }
 
 function rowToPoolFile(row: PoolFileRow): PoolFile {
@@ -62,6 +65,7 @@ function rowToPoolFile(row: PoolFileRow): PoolFile {
 		status: row.status === "ready" ? "ready" : "uploading",
 		chunks,
 		createdAt: row.created_at,
+		uploaderId: row.uploader_id ?? null,
 	};
 }
 
@@ -129,17 +133,27 @@ export async function createPoolFile(
 	size: number,
 	contentType: string,
 	memberIds: number[],
-	telegramMemberIds: number[] = []
+	telegramMemberIds: number[] = [],
+	uploaderId: number | null = null
 ): Promise<PoolFile> {
 	const id = crypto.randomUUID();
 	const chunkSize = computeChunkSize(size, telegramMemberIds.length > 0);
 	const chunks = planPoolChunks(folder, id, size, memberIds, telegramMemberIds);
 	await db
 		.prepare(
-			`INSERT INTO pool_files (id, folder_id, name, size, chunk_size, content_type, status, chunks)
-			 VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`
+			`INSERT INTO pool_files (id, folder_id, name, size, chunk_size, content_type, status, chunks, uploader_id)
+			 VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?, ?)`
 		)
-		.bind(id, folder.id, name, size, chunkSize, contentType, JSON.stringify(chunks))
+		.bind(
+			id,
+			folder.id,
+			name,
+			size,
+			chunkSize,
+			contentType,
+			JSON.stringify(chunks),
+			uploaderId
+		)
 		.run();
 	return {
 		id,
@@ -151,6 +165,7 @@ export async function createPoolFile(
 		status: "uploading",
 		chunks,
 		createdAt: new Date().toISOString(),
+		uploaderId,
 	};
 }
 

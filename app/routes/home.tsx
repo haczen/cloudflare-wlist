@@ -318,6 +318,10 @@ interface S3Object {
 	/** 聚合盘分片分布摘要（如 "6 片 · 3 盘"），title 显示明细 */
 	poolBuckets?: string;
 	poolDetail?: string;
+	/** 聚合盘：当前登录用户是否上传者（删除/重命名入口依据，访客恒 false） */
+	mine?: boolean;
+	/** 聚合盘：上传者显示名（仅管理员列表数据里有） */
+	uploader?: string;
 }
 
 /** 除百度网盘（不支持分块）外全部支持 */
@@ -708,6 +712,8 @@ function FileBrowser({
 							chunks: number;
 							createdAt: string;
 							buckets?: Array<{ name: string; count: number }>;
+							mine?: boolean;
+							uploader?: string;
 						}>;
 					};
 					setObjects(
@@ -719,6 +725,8 @@ function FileBrowser({
 							size: f.size,
 							lastModified: f.createdAt,
 							isDirectory: false,
+							mine: f.mine === true,
+							uploader: f.uploader,
 							poolBuckets:
 								f.buckets && f.buckets.length > 0
 									? `${f.chunks} 片 · ${f.buckets.length} 盘`
@@ -727,7 +735,7 @@ function FileBrowser({
 								f.buckets && f.buckets.length > 0
 									? `分片分布：${f.buckets
 											.map((b) => `${b.name} ×${b.count}`)
-											.join("、")}`
+											.join("、")}${f.uploader ? ` · 上传者：${f.uploader}` : ""}`
 									: undefined,
 						}))
 					);
@@ -1203,8 +1211,11 @@ function FileBrowser({
 			message: `确定删除 ${files.length} 个文件和 ${folders.length} 个文件夹（含其中所有内容）？此操作不可恢复。`,
 			onConfirm: async () => {
 				let failed = 0;
-				// 聚合盘文件走各自删除端点（每桶一次批量请求，服务端处理）
-				const poolFiles = files.filter((f) => f.pool && f.fileId);
+				// 聚合盘文件走各自删除端点（每桶一次批量请求，服务端处理）。
+				// 非管理员只能删自己上传的：别人的跳过并在结束后提示，避免逐个 403 弹窗
+				const allPool = files.filter((f) => f.pool && f.fileId);
+				const poolFiles = isAdmin ? allPool : allPool.filter((f) => f.mine);
+				const skipped = allPool.length - poolFiles.length;
 				for (const pf of poolFiles) {
 					try {
 						const res = await fetch(`/api/pool/${pf.fileId}`, {
@@ -1247,6 +1258,10 @@ function FileBrowser({
 				}
 				if (failed > 0) {
 					window.alert(`删除完成，${failed} 个项目失败`);
+				} else if (skipped > 0) {
+					window.alert(
+						`已删除自己上传的 ${poolFiles.length} 个文件；另外 ${skipped} 个是别人上传的，不能删除`
+					);
 				}
 				setSelectedKeys(new Set());
 				loadFiles();
@@ -1656,7 +1671,8 @@ function FileBrowser({
 							</h3>
 							<p className="mt-1 text-xs leading-relaxed text-indigo-700/90 dark:text-indigo-300/90">
 								面向所有用户的中转盘：<strong>无需登录</strong>
-								即可上传、下载、删除。大文件会自动切片分布到多个网盘，下载时自动拼回完整原件。
+								即可上传、下载；登录用户可以删除<strong>自己上传</strong>的文件。
+								大文件会自动切片分布到多个网盘，下载时自动拼回完整原件。
 								<span className="ml-1 rounded-md bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
 									⏰ 文件保留 7 天，到期自动清理
 								</span>
@@ -1688,7 +1704,12 @@ function FileBrowser({
 							批量下载
 						</button>
 					)}
-					{canManage && (
+					{/* 批量删除：管理员；或选中里含自己上传的聚合盘文件（非管理员的其余项会被服务端拒绝，提前过滤） */}
+					{(canManage ||
+						(folderMode === "pool" &&
+							objects.some(
+								(o) => o.pool && o.mine && selectedKeys.has(o.key)
+							))) && (
 						<button
 							type="button"
 							className="btn-danger !py-1 !text-xs"
@@ -1906,6 +1927,14 @@ function FileBrowser({
 													📦 {obj.poolBuckets}
 												</span>
 											)}
+											{obj.pool && obj.uploader && (
+												<span
+													className="shrink-0 truncate text-[10px] text-zinc-400 dark:text-zinc-500"
+													title={`上传者：${obj.uploader}`}
+												>
+													{obj.uploader}
+												</span>
+											)}
 										</button>
 									</td>
 									<td className="px-3 py-1.5 text-xs text-zinc-500">
@@ -2112,7 +2141,9 @@ function FileBrowser({
 							复制直链
 						</button>
 					)}
-					{canManage && (
+					{/* 管理操作：管理员全通；聚合盘文件另开放给上传者本人（只能动自己的） */}
+					{(canManage ||
+						(contextMenu.obj.pool && contextMenu.obj.mine)) && (
 						<>
 							{!contextMenu.obj.isDirectory &&
 								!contextMenu.obj.pool &&
@@ -2131,28 +2162,32 @@ function FileBrowser({
 										编辑
 									</button>
 								)}
-							<button
-								type="button"
-								className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-								onClick={() => {
-									renameObject(contextMenu.obj);
-									setContextMenu(null);
-								}}
-							>
-								<RenameIcon className="h-4 w-4" />
-								重命名
-							</button>
-							<button
-								type="button"
-								className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-								onClick={() => {
-									setMoveTarget(contextMenu.obj);
-									setContextMenu(null);
-								}}
-							>
-								<MoveIcon className="h-4 w-4" />
-								移动
-							</button>
+							{(canManage || contextMenu.obj.pool) && (
+								<button
+									type="button"
+									className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+									onClick={() => {
+										renameObject(contextMenu.obj);
+										setContextMenu(null);
+									}}
+								>
+									<RenameIcon className="h-4 w-4" />
+									重命名
+								</button>
+							)}
+							{canManage && !contextMenu.obj.pool && (
+								<button
+									type="button"
+									className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+									onClick={() => {
+										setMoveTarget(contextMenu.obj);
+										setContextMenu(null);
+									}}
+								>
+									<MoveIcon className="h-4 w-4" />
+									移动
+								</button>
+							)}
 							<div className="my-1 border-t border-zinc-200 dark:border-zinc-700" />
 							<button
 								type="button"

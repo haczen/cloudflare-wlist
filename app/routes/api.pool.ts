@@ -64,6 +64,18 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	// 附带每个文件的分片分布（哪些桶、各几片）——下载回源与 UI 展示共用这份清单
 	const storages = await getAllStorages(db);
 	const nameById = new Map(storages.map((s) => [s.id, s.name]));
+	// 上传者显示名（管理员看列表用；缓存避免逐文件查库）
+	const uploaderIds = [
+		...new Set(files.map((f) => f.uploaderId).filter((id): id is number => id !== null)),
+	];
+	const uploaderNames = new Map<number, string>();
+	if (isAdmin && uploaderIds.length > 0) {
+		const { getUserById } = await import("~/lib/users");
+		for (const uid of uploaderIds) {
+			const u = await getUserById(db, uid);
+			if (u) uploaderNames.set(uid, u.displayName || u.username);
+		}
+	}
 	return Response.json({
 		files: files.map((f) => {
 			const buckets = [...groupChunksByStorage(f.chunks)]
@@ -79,6 +91,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 				chunks: f.chunks.length,
 				createdAt: f.createdAt,
 				buckets,
+				// 当前登录用户是否上传者（删除/重命名入口的显示依据；访客恒 false）
+				mine: !!user && f.uploaderId === user.id,
+				...(isAdmin
+					? { uploader: f.uploaderId === null ? "访客" : uploaderNames.get(f.uploaderId) ?? `用户#${f.uploaderId}` }
+					: {}),
 			};
 		}),
 	});
@@ -180,7 +197,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 			size,
 			contentType,
 			members,
-			telegramMembers
+			telegramMembers,
+			user?.id ?? null
 		);
 		await logAudit(db, {
 			action: "pool.init",
@@ -189,7 +207,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 			userAgent: meta.userAgent,
 			storageId: members[0],
 			path: `${folder.storagePath}/${name}`,
-			detail: { fileId: file.id, size, chunks: file.chunks.length, members },
+			detail: { fileId: file.id, size, chunks: file.chunks.length, members, uploader: user?.username ?? "guest" },
 		});
 		return Response.json({
 			file: {
@@ -238,7 +256,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 			size,
 			contentType,
 			members,
-			[]
+			[],
+			user?.id ?? null
 		);
 		if (file.chunks.length === 1) {
 			// 单片：bytes.buffer 就是全部内容（TextEncoder 产出的 buffer 恰好贴合）

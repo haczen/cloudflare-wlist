@@ -420,6 +420,7 @@ export async function initDatabase(db: D1Database): Promise<void> {
       status TEXT NOT NULL DEFAULT 'uploading',
       chunks TEXT NOT NULL DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')),
+      uploader_id INTEGER,
       FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
     )`,
 		`CREATE INDEX IF NOT EXISTS idx_pool_files_folder ON pool_files(folder_id)`,
@@ -507,6 +508,18 @@ export async function initDatabase(db: D1Database): Promise<void> {
 				.prepare("ALTER TABLE folders ADD COLUMN pool_members TEXT")
 				.run();
 		}
+	}
+
+	// 迁移：pool_files 增加上传者归属 uploader_id（删除/重命名的所有权校验）。
+	// NULL = 访客上传或迁移前旧数据 —— 两者都只有管理员能删，语义一致无需回填
+	const poolCols = await db
+		.prepare("PRAGMA table_info(pool_files)")
+		.all<{ name: string }>();
+	const poolNames = new Set((poolCols.results ?? []).map((c) => c.name));
+	if (poolNames.size > 0 && !poolNames.has("uploader_id")) {
+		await db
+			.prepare("ALTER TABLE pool_files ADD COLUMN uploader_id INTEGER")
+			.run();
 	}
 
 	schemaInitialized = true;
