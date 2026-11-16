@@ -164,7 +164,11 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const model = (await Live2DModel.from(
-					"/live2d/haru/haru_greeter_t03.model3.json"
+					"/live2d/haru/haru_greeter_t03.model3.json",
+					// autoInteract 关掉：库内置自动交互走 pixi 已废弃的 interaction 插件
+					// （会抛 "t.on is not a function" 噪音），点击由小窝容器手动接
+					{ autoInteract: false }
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				)) as any;
 				if (disposed) {
 					model.destroy?.();
@@ -174,12 +178,6 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 				model.anchor.set(0.5, 1); // 底部中心 = 脚站地板
 				model.position.set(ROOM_W * 0.52, FLOOR_TOP + 6);
 				model.scale.set(0.205); // haru 逻辑高约 1380 → 约 283px
-				// 点击身体/头：互动动作 + 随机表情 + 台词
-				model.on("hit", () => {
-					model.motion("Tap");
-					model.expression(`f0${Math.floor(Math.random() * 8)}`);
-					poke();
-				});
 				app.stage.addChild(model);
 				appRef.current = app;
 				modelRef.current = model;
@@ -458,11 +456,20 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 					aria-hidden="true"
 				/>
 
-				{/* Live2D 画布（人物叠在场景上，点击=互动，悬停=视线跟随） */}
+				{/* Live2D 画布（人物叠在场景上，悬停=视线跟随，点击=互动+台词） */}
 				<div
 					ref={stageRef}
 					className="absolute inset-0 z-10 cursor-pointer"
 					onPointerMove={onStagePointerMove}
+					onClick={() => {
+						// autoInteract 关闭后手动接点击（库内置版走废弃插件会抛错）
+						const m = modelRef.current;
+						if (m) {
+							m.motion("Tap");
+							m.expression(`f0${Math.floor(Math.random() * 8)}`);
+						}
+						poke();
+					}}
 					title="她是小窝的看板娘，点点看？"
 				/>
 
