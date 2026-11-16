@@ -169,9 +169,10 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 						document.head.appendChild(s);
 					});
 				}
-				// 2) pixi + live2d 显示层（动态 import：SSR 无关、不进主 bundle）
+				// 2) pixi + live2d 显示层（动态 import：SSR 无关、不进主 bundle；
+				//    0.4.0 主入口是全量包含 Cubism4 检查，须用 cubism2 子入口）
 				const pixi = await import("pixi.js");
-				const { Live2DModel } = await import("pixi-live2d-display");
+				const { Live2DModel } = await import("pixi-live2d-display/cubism2");
 				// 库依赖 window.PIXI 暴露（Ticker / 注册表）
 				(window as unknown as { PIXI: unknown }).PIXI = pixi;
 				if (disposed || !stageRef.current) return;
