@@ -101,7 +101,7 @@ fork 后在仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLA
 
 1. [github.com/settings/developers](https://github.com/settings/developers) 新建 OAuth App，回调填 `https://你的域名/api/auth/github/callback`
 2. **本地部署**（`npm run deploy`）：Client ID / Secret 填入 `wrangler.jsonc` 的 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`
-   **CI 部署**（推荐）：改为在仓库 Settings → Secrets and variables → Actions 添加 secrets `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` ——
+   **CI 部署**（推荐）：改为在仓库 Settings → Secrets and variables → Actions 添加 secrets `_GITHUB_CLIENT_ID` / `_GITHUB_CLIENT_SECRET`（注意 GitHub Actions 禁止 secrets 以 `GITHUB_` 开头——保留前缀，所以必须带前导下划线，CI 里会映射回正确的变量名）。
    CI 每次部署都从 example 模板重新生成 `wrangler.jsonc`，本地文件的修改不会生效，secrets 缺失时这两个 var 会被覆盖为空、GitHub 登录自动禁用
 3. 重新部署后生效
 

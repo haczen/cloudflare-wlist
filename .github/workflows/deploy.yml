@@ -31,8 +31,8 @@ jobs:
           cfg.d1_databases[0].database_id = dbId;
           if (process.env.ADMIN_PASSWORD) cfg.vars.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
           if (process.env.WEBDAV_PASSWORD) cfg.vars.WEBDAV_PASSWORD = process.env.WEBDAV_PASSWORD;
-          if (process.env.GITHUB_CLIENT_ID) cfg.vars.GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
-          if (process.env.GITHUB_CLIENT_SECRET) cfg.vars.GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+          if (process.env.CF_GH_ID) cfg.vars.GITHUB_CLIENT_ID = process.env.CF_GH_ID;
+          if (process.env.CF_GH_SECRET) cfg.vars.GITHUB_CLIENT_SECRET = process.env.CF_GH_SECRET;
           if (process.env.TELEGRAM_WEBHOOK_SECRET) cfg.vars.TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
           fs.writeFileSync('wrangler.jsonc', JSON.stringify(cfg, null, '\t'));
           console.log('wrangler.jsonc generated for database ' + dbId);
@@ -41,8 +41,8 @@ jobs:
           DATABASE_ID: ${{ vars.DATABASE_ID }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          CF_GH_ID: ${{ secrets._GITHUB_CLIENT_ID }}
+          CF_GH_SECRET: ${{ secrets._GITHUB_CLIENT_SECRET }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
 
       - name: Install dependencies
