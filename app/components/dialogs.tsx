@@ -1139,6 +1139,7 @@ export function NewFolderDialog({
 	currentFolderName,
 	storageOptions,
 	defaultMode = "all",
+	defaultStorageId,
 	onCreated,
 	onClose,
 }: {
@@ -1149,13 +1150,15 @@ export function NewFolderDialog({
 	storageOptions: StorageOption[];
 	/** 初始存储方式（顶层新建普通目录入口传 "single"） */
 	defaultMode?: "all" | "some" | "single";
+	/** 顶层单盘模式的默认选中桶（如当前正在浏览的桶） */
+	defaultStorageId?: number;
 	onCreated: () => void;
 	onClose: () => void;
 }) {
 	const isSub = currentFolderId !== null;
 	const [folderName, setFolderName] = useState("");
 	const [targetStorageId, setTargetStorageId] = useState(
-		storageOptions[0]?.id || 0
+		defaultStorageId ?? storageOptions[0]?.id ?? 0
 	);
 	const [isPublic, setIsPublic] = useState(false);
 	// 存储方式三选一：平分全部盘 / 指定几个盘平分 / 只存到一个盘
@@ -1185,7 +1188,8 @@ export function NewFolderDialog({
 		setCreating(true);
 		setError(null);
 		try {
-			const isPool = isAdmin && (mode === "all" || mode === "some");
+			// 子目录（isSub）不选存储：盘 / 路径 / 模式无条件继承父目录
+			const isPool = !isSub && isAdmin && (mode === "all" || mode === "some");
 			const response = await fetch("/api/folders", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -1250,7 +1254,8 @@ export function NewFolderDialog({
 				className="space-y-3"
 				onSubmit={handleSubmit}
 			>
-				{isAdmin && (
+				{/* 存储方式只对顶层目录有意义——子目录无条件继承父目录的盘 / 路径 / 模式，不询问 */}
+				{isAdmin && !isSub && (
 					<div>
 						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
 							存储方式
@@ -1308,7 +1313,7 @@ export function NewFolderDialog({
 						</div>
 					</div>
 				)}
-				{isAdmin && mode === "some" && (
+				{isAdmin && !isSub && mode === "some" && (
 					<div>
 						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
 							成员盘（已选 {poolMembers.length} / {storageOptions.length}）
@@ -1388,7 +1393,7 @@ export function NewFolderDialog({
 							checked={guestUpload}
 							onChange={(event) => setGuestUpload(event.target.checked)}
 						/>
-						允许访客上传（传输盘模式：不登录也能传 / 下 / 删）
+						允许访客上传（传输盘模式：不登录可传可下；删除需登录且仅限自己上传的文件）
 					</label>
 				)}
 				{error && (
@@ -1532,7 +1537,7 @@ export function EditFolderDialog({
 							checked={guestUpload}
 							onChange={(event) => setGuestUpload(event.target.checked)}
 						/>
-						允许访客上传（传输盘模式：不登录也能传 / 下 / 删）
+						允许访客上传（传输盘模式：不登录可传可下；删除需登录且仅限自己上传的文件）
 					</label>
 				)}
 

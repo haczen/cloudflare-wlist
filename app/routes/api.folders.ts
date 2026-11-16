@@ -142,11 +142,15 @@ export async function action({ request, context }: Route.ActionArgs) {
 		try {
 			// 公开性只能由管理员设置：否则任何有上传权限的用户都能把子目录公开给全世界
 			const effectiveIsPublic = isAdmin ? !!isPublic : false;
-			// 访客上传 / 聚合盘模式同样仅管理员可配
+			// 访客上传仅管理员可配
 			const effectiveGuestUpload = isAdmin ? !!guestUpload : false;
-			const effectiveMode = isAdmin && mode === "pool" ? "pool" : "normal";
+			// 存储模式：只有顶层目录可指定聚合盘；子目录的盘 / 路径 / 模式无条件继承父目录
+			// （普通目录下建出的必然是普通目录——此前 UI 把子目录默认成「平分全部盘」，
+			//  服务端又采信该参数，导致普通目录里新建子目录会被静默建成聚合盘）
+			const effectiveMode =
+				!parentId && isAdmin && mode === "pool" ? "pool" : "normal";
 			const effectiveMembers =
-				isAdmin && effectiveMode === "pool" && Array.isArray(poolMembers)
+				!parentId && isAdmin && effectiveMode === "pool" && Array.isArray(poolMembers)
 					? poolMembers.filter((v) => typeof v === "number")
 					: [];
 			const folder = await createFolderRecord(db, {

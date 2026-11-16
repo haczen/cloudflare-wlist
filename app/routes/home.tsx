@@ -2289,6 +2289,10 @@ function FileBrowser({
 					currentFolderId={currentFolderId}
 					currentFolderName={rootLabel}
 					storageOptions={storageOptions}
+					// 桶根浏览时的顶层新建默认就落在本桶（与侧栏顶层入口 32d2060 的「普通单盘」一致；
+					// 子目录场景选择器整块隐藏，这里只影响顶层）
+					defaultMode="single"
+					defaultStorageId={storage.id}
 					onCreated={() => {
 						loadFiles();
 						onFoldersChanged();
