@@ -20,7 +20,7 @@ import {
 	type EnqueueEntry,
 } from "~/lib/upload-manager";
 import { UploadTaskPanel } from "~/components/UploadTaskPanel";
-import SitePet from "~/components/SitePet";
+import Live2DHome from "~/components/Live2DHome";
 import WelcomeDialog from "~/components/WelcomeDialog";
 
 // ---------- 带权限的目录树节点 ----------
@@ -3053,7 +3053,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			)}
 
 			{/* 守盘小猫：上传时说加油 */}
-			<SitePet busy={uploadBusy} />
+			<Live2DHome busy={uploadBusy} />
 
 			{showLogin && (
 				<LoginDialog

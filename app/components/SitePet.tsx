@@ -7,6 +7,7 @@
  *   聊天记录存 localStorage wlist-pet-chat
  */
 import { useEffect, useRef, useState } from "react";
+import { usePetChat } from "./usePetChat";
 
 /** 日常台词（含网盘 / 上传主题） */
 const PHRASES: string[] = [
@@ -32,14 +33,6 @@ const BUSY_PHRASES: string[] = [
 	"数据包搬运中，喵喵加油！",
 	"马上就好，再撸我一下下~",
 ];
-
-interface ChatMessage {
-	role: "user" | "assistant";
-	content: string;
-}
-
-const CHAT_STORAGE_KEY = "wlist-pet-chat";
-const CHAT_KEEP = 30; // localStorage 只留最近 N 条
 
 const STYLE = `
 @keyframes sitepet-bob {
@@ -115,42 +108,20 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 	const lastIdxRef = useRef(-1);
 
 	// AI 聊天状态
-	const [aiConfigured, setAiConfigured] = useState(false);
 	const [chatOpen, setChatOpen] = useState(false);
-	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	const [chatInput, setChatInput] = useState("");
-	const [waiting, setWaiting] = useState(false);
-	const [chatError, setChatError] = useState<string | null>(null);
-	const listRef = useRef<HTMLDivElement | null>(undefined);
 	const inputRef = useRef<HTMLInputElement | null>(null);
+	const listRef = useRef<HTMLDivElement | null>(null);
+	const { aiConfigured, messages, waiting, chatError, sendChat, clearChat } =
+		usePetChat();
 
 	// 卸载时清掉气泡定时器
 	useEffect(() => {
 		return () => window.clearTimeout(timerRef.current);
 	}, []);
 
-	// 挂载后探测是否已接 AI + 恢复聊天记录（SSR 安全：都在 effect 里）
+	// 新消息滚动到底
 	useEffect(() => {
-		fetch("/api/pet")
-			.then((r) => (r.ok ? r.json() : null))
-			.then((d: { configured?: boolean } | null) => {
-				if (d?.configured) setAiConfigured(true);
-			})
-			.catch(() => { /* 探测失败按未配置走，不影响戳一戳 */ });
-		try {
-			const saved = localStorage.getItem(CHAT_STORAGE_KEY);
-			if (saved) {
-				const parsed = JSON.parse(saved) as ChatMessage[];
-				if (Array.isArray(parsed) && parsed.length > 0) setMessages(parsed);
-			}
-		} catch { /* 损坏忽略 */ }
-	}, []);
-
-	// 记录变化就持久化 + 滚到底
-	useEffect(() => {
-		try {
-			localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-CHAT_KEEP)));
-		} catch { /* 隐私模式等场景忽略 */ }
 		const list = listRef.current;
 		if (list) list.scrollTop = list.scrollHeight;
 	}, [messages, waiting]);
@@ -177,31 +148,6 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 			}
 			return next;
 		});
-	};
-
-	const sendChat = (): void => {
-		const text = chatInput.trim();
-		if (!text || waiting) return;
-		setChatError(null);
-		const nextMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
-		setMessages(nextMessages);
-		setChatInput("");
-		setWaiting(true);
-		fetch("/api/pet", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			// 上下文只带最近 10 条，服务端有同样的钳制
-			body: JSON.stringify({ messages: nextMessages.slice(-10) }),
-		})
-			.then(async (r) => {
-				const data = (await r.json().catch(() => ({}))) as { reply?: string; error?: string };
-				if (!r.ok || !data.reply) throw new Error(data.error || "回复失败");
-				setMessages((prev) => [...prev, { role: "assistant", content: data.reply! }]);
-			})
-			.catch((err) => {
-				setChatError(err instanceof Error ? err.message : "回复失败");
-			})
-			.finally(() => setWaiting(false));
 	};
 
 	return (
@@ -240,10 +186,7 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 								type="button"
 								title="清空聊天"
 								className="rounded p-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-								onClick={() => {
-									setMessages([]);
-									setChatError(null);
-								}}
+								onClick={clearChat}
 							>
 								🧹
 							</button>
@@ -304,7 +247,8 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 						className="flex items-center gap-1.5 border-t border-zinc-100 p-2 dark:border-zinc-800"
 						onSubmit={(e) => {
 							e.preventDefault();
-							sendChat();
+							sendChat(chatInput);
+							setChatInput("");
 						}}
 					>
 						<input
