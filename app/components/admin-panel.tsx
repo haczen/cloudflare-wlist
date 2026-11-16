@@ -786,7 +786,7 @@ export function UserFormDialog({
 
 // ---------- 管理面板主组件 ----------
 
-type AdminTab = "storages" | "users" | "shares" | "backup" | "audit" | "webdav";
+type AdminTab = "storages" | "users" | "shares" | "backup" | "audit" | "webdav" | "pet";
 
 export function AdminPanel({
 	storages,
@@ -823,7 +823,18 @@ export function AdminPanel({
 	const [showAddUser, setShowAddUser] = useState(false);
 	const [folderTree, setFolderTree] = useState<AdminFolderNode[]>([]);
 
-	// 拉取分享 / 审计 / 用户数据 + 目录树
+	// 小猫 AI 配置
+	const [petForm, setPetForm] = useState({
+		baseUrl: "https://api.deepseek.com/v1",
+		model: "deepseek-chat",
+		apiKey: "",
+		systemPrompt: "",
+	});
+	const [petConfigured, setPetConfigured] = useState(false);
+	const [petSaving, setPetSaving] = useState(false);
+	const [petMessage, setPetMessage] = useState<string | null>(null);
+
+	// 拉取分享 / 审计 / 用户 / 小猫配置 + 目录树
 	useEffect(() => {
 		if (tab === "users") {
 			fetch("/api/users")
@@ -851,7 +862,54 @@ export function AdminPanel({
 				.then((data) => setAuditLogs(data.logs || []))
 				.catch(() => setAuditLogs([]));
 		}
+		if (tab === "pet") {
+			fetch("/api/pet")
+				.then((response) =>
+					response.json() as Promise<{
+						configured?: boolean;
+						baseUrl?: string;
+						model?: string;
+						systemPrompt?: string;
+					}>
+				)
+				.then((data) => {
+					setPetConfigured(!!data.configured);
+					if (data.baseUrl && data.model) {
+						// key 永不回传：留空 = 保存时沿用
+						setPetForm((prev) => ({
+							...prev,
+							baseUrl: data.baseUrl!,
+							model: data.model!,
+							apiKey: "",
+							systemPrompt: data.systemPrompt || "",
+						}));
+					}
+				})
+				.catch(() => { /* 读取失败按默认表单 */ });
+		}
 	}, [tab, auditAction]);
+
+	const handleSavePetConfig = async (event: React.FormEvent) => {
+		event.preventDefault();
+		setPetSaving(true);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(petForm),
+			});
+			const data = (await response.json().catch(() => ({}))) as { error?: string };
+			if (!response.ok) throw new Error(data.error || "保存失败");
+			setPetConfigured(true);
+			setPetForm((prev) => ({ ...prev, apiKey: "" }));
+			setPetMessage("已保存！刷新页面后，右下角小猫就能聊天了 🐱");
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "保存失败");
+		} finally {
+			setPetSaving(false);
+		}
+	};
 
 	const handleDeleteStorage = async (storage: StorageInfo) => {
 		if (
@@ -996,6 +1054,7 @@ export function AdminPanel({
 		{ key: "backup", label: "备份" },
 		{ key: "audit", label: "审计" },
 		{ key: "webdav", label: "WebDAV" },
+		{ key: "pet", label: "小猫 AI" },
 	];
 
 	return (
@@ -1456,6 +1515,99 @@ export function AdminPanel({
 										连接服务器
 									</div>
 								</div>
+							</div>
+						</div>
+					)}
+
+					{/* 小猫 AI 配置 */}
+					{tab === "pet" && (
+						<div className="mx-auto max-w-lg py-4">
+							<div className="card space-y-3 p-4 text-sm">
+								<div className="flex items-center gap-2">
+									<span aria-hidden>🐱</span>
+									<h4 className="font-semibold text-zinc-900 dark:text-zinc-100">
+										守盘小猫 · AI 对话
+									</h4>
+									<span
+										className={`badge ${
+											petConfigured
+												? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
+												: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+										}`}
+									>
+										{petConfigured ? "已接入" : "未接入"}
+									</span>
+								</div>
+								<p className="text-xs leading-relaxed text-zinc-500">
+									填一个 OpenAI 兼容接口，右下角的小猫就能聊天了。所有访客都可以跟她对话；
+									API Key 只存在服务端（D1），浏览器全程接触不到。每 IP 10 分钟 15 条、单条回复
+									480 token 封顶，防止被薅。
+								</p>
+								<form className="space-y-3" onSubmit={handleSavePetConfig}>
+									<div>
+										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+											API Base URL（OpenAI 兼容）
+										</label>
+										<input
+											className="input"
+											placeholder="https://api.deepseek.com/v1"
+											value={petForm.baseUrl}
+											onChange={(e) => setPetForm((p) => ({ ...p, baseUrl: e.target.value }))}
+										/>
+										<p className="mt-1 text-[11px] text-zinc-400">
+											DeepSeek / GLM / Kimi / OpenAI / 自建 Ollama 均可，一般以 /v1 结尾
+										</p>
+									</div>
+									<div>
+										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+											模型名
+										</label>
+										<input
+											className="input"
+											placeholder="deepseek-chat"
+											value={petForm.model}
+											onChange={(e) => setPetForm((p) => ({ ...p, model: e.target.value }))}
+										/>
+									</div>
+									<div>
+										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+											API Key{petConfigured ? "（留空 = 沿用已保存的）" : ""}
+										</label>
+										<input
+											className="input"
+											type="password"
+											placeholder={petConfigured ? "••••••••（已保存）" : "sk-…"}
+											autoComplete="new-password"
+											value={petForm.apiKey}
+											onChange={(e) => setPetForm((p) => ({ ...p, apiKey: e.target.value }))}
+										/>
+									</div>
+									<div>
+										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+											人设提示词（System Prompt，可改）
+										</label>
+										<textarea
+											className="input h-28 resize-y font-mono text-xs"
+											value={petForm.systemPrompt}
+											onChange={(e) => setPetForm((p) => ({ ...p, systemPrompt: e.target.value }))}
+										/>
+									</div>
+									{petMessage && (
+										<p
+											className={`rounded-lg px-3 py-2 text-xs ${
+												petConfigured && petMessage.includes("已保存")
+													? "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400"
+													: "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400"
+											}`}
+										>
+											{petMessage}
+										</p>
+									)}
+									<button type="submit" className="btn-primary w-full" disabled={petSaving}>
+										{petSaving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+										保存配置
+									</button>
+								</form>
 							</div>
 						</div>
 					)}

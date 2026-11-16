@@ -439,6 +439,11 @@ export async function initDatabase(db: D1Database): Promise<void> {
       UNIQUE(storage_id, object_key),
       FOREIGN KEY (storage_id) REFERENCES storages(id) ON DELETE CASCADE
     )`,
+		// 杂项设置（键值对）：如守盘小猫的 AI 接入配置。敏感值（API key）只存服务端
+		`CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`,
 		`CREATE INDEX IF NOT EXISTS idx_tg_objects_storage ON tg_objects(storage_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_storages_is_public ON storages(is_public)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
