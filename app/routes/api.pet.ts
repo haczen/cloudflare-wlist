@@ -208,5 +208,21 @@ export async function action({ request, context }: Route.ActionArgs) {
 		return Response.json({ reply });
 	}
 
+	if (request.method === "DELETE") {
+		// 断开 AI：清配置，小猫回到纯戳一戳模式
+		if (!isAdmin) {
+			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
+		}
+		await db.prepare("DELETE FROM app_settings WHERE key = ?").bind(SETTING_KEY).run();
+		await logAudit(db, {
+			action: "pet.config",
+			userType: "admin",
+			ip: meta.ip,
+			userAgent: meta.userAgent,
+			detail: { disabled: true },
+		});
+		return Response.json({ success: true });
+	}
+
 	return Response.json({ error: "Method not allowed" }, { status: 405 });
 }

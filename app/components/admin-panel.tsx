@@ -911,6 +911,22 @@ export function AdminPanel({
 		}
 	};
 
+	const handleDisablePet = async () => {
+		if (!window.confirm("断开 AI 对话？小猫会回到纯戳一戳模式。")) return;
+		setPetSaving(true);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet", { method: "DELETE" });
+			if (!response.ok) throw new Error("断开失败");
+			setPetConfigured(false);
+			setPetMessage("已断开。");
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "断开失败");
+		} finally {
+			setPetSaving(false);
+		}
+	};
+
 	const handleDeleteStorage = async (storage: StorageInfo) => {
 		if (
 			!window.confirm(
@@ -1603,10 +1619,22 @@ export function AdminPanel({
 											{petMessage}
 										</p>
 									)}
-									<button type="submit" className="btn-primary w-full" disabled={petSaving}>
-										{petSaving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
-										保存配置
-									</button>
+									<div className="flex gap-2">
+										<button type="submit" className="btn-primary flex-1" disabled={petSaving}>
+											{petSaving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+											保存配置
+										</button>
+										{petConfigured && (
+											<button
+												type="button"
+												className="btn-danger flex-1"
+												disabled={petSaving}
+												onClick={handleDisablePet}
+											>
+												断开 AI
+											</button>
+										)}
+									</div>
 								</form>
 							</div>
 						</div>
