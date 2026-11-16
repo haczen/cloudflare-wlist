@@ -175,12 +175,19 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 					app.destroy(true);
 					return;
 				}
-				model.anchor.set(0.5, 1); // 底部中心 = 脚站地板
-				model.position.set(ROOM_W * 0.52, FLOOR_TOP + 6);
-				model.scale.set(0.205); // haru 逻辑高约 1380 → 约 283px
+				// 按模型自然尺寸动态缩放：不同模型分辨率差异巨大（haru 实测远高于
+				// 初估），写死系数必翻车；锚点底部中心 → 人物脚站在地板上
+				const naturalHeight = model.height; // scale=1 时的固有高度
+				const TARGET_H = 200; // 目标身高 ≈ 房高 340 的 59%，头顶不挡窗、脚踩地毯
+				model.scale.set(TARGET_H / naturalHeight);
+				model.anchor.set(0.5, 1);
+				model.position.set(ROOM_W * 0.54, FLOOR_TOP + 6);
 				app.stage.addChild(model);
 				appRef.current = app;
 				modelRef.current = model;
+				// 调试句柄：线上量尺寸 / 位置用（只读无害）
+				(window as unknown as { __wlistPetModel?: unknown }).__wlistPetModel =
+					model;
 				setMode("live2d");
 			} catch (err) {
 				console.warn("Live2D 小窝加载失败，回退 SVG 小猫:", err);
