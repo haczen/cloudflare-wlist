@@ -159,7 +159,17 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		let disposed = false;
 		(async () => {
 			try {
-				// Cubism2 模型不需要外部 Core，渲染层库动态 import（不进主 bundle）
+				// 1) Cubism 2 官方 runtime（live2d.min.js 提供全局 Live2D，渲染库依赖）
+				if (!(window as unknown as { Live2D?: unknown }).Live2D) {
+					await new Promise<void>((resolve, reject) => {
+						const s = document.createElement("script");
+						s.src = "/live2d/core/live2d.min.js";
+						s.onload = () => resolve();
+						s.onerror = () => reject(new Error("live2d.min.js 加载失败"));
+						document.head.appendChild(s);
+					});
+				}
+				// 2) pixi + live2d 显示层（动态 import：SSR 无关、不进主 bundle）
 				const pixi = await import("pixi.js");
 				const { Live2DModel } = await import("pixi-live2d-display");
 				// 库依赖 window.PIXI 暴露（Ticker / 注册表）
