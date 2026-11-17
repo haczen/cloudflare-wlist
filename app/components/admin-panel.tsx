@@ -834,6 +834,7 @@ export function AdminPanel({
 	const [petModel, setPetModel] = useState("shizuku");
 	const [petSaving, setPetSaving] = useState(false);
 	const [petMessage, setPetMessage] = useState<string | null>(null);
+	const [petModelMessage, setPetModelMessage] = useState<string | null>(null);
 
 	// 拉取分享 / 审计 / 用户 / 小猫配置 + 目录树
 	useEffect(() => {
@@ -894,7 +895,7 @@ export function AdminPanel({
 
 	const handleSwitchPetModel = async (key: string) => {
 		setPetModel(key);
-		setPetMessage(null);
+		setPetModelMessage(null);
 		try {
 			const response = await fetch("/api/pet", {
 				method: "PUT",
@@ -902,9 +903,9 @@ export function AdminPanel({
 				body: JSON.stringify({ petModel: key }),
 			});
 			if (!response.ok) throw new Error("切换失败");
-			setPetMessage(`已切换形象，刷新页面即可看到新的看板娘 ✨`);
+			setPetModelMessage(`已切换形象，刷新页面即可看到新的看板娘 ✨`);
 		} catch (err) {
-			setPetMessage(err instanceof Error ? err.message : "切换失败");
+			setPetModelMessage(err instanceof Error ? err.message : "切换失败");
 		}
 	};
 
@@ -1089,7 +1090,7 @@ export function AdminPanel({
 		{ key: "backup", label: "备份" },
 		{ key: "audit", label: "审计" },
 		{ key: "webdav", label: "WebDAV" },
-		{ key: "pet", label: "小猫 AI" },
+		{ key: "pet", label: "看板娘" },
 	];
 
 	return (
@@ -1554,14 +1555,64 @@ export function AdminPanel({
 						</div>
 					)}
 
-					{/* 小猫 AI 配置 */}
+					{/* 看板娘：形象 + AI 两件独立的事，各自保存互不相干 */}
 					{tab === "pet" && (
-						<div className="mx-auto max-w-lg py-4">
+						<div className="mx-auto max-w-lg space-y-4 py-4">
+							{/* ---- 形象选择：点谁存谁，跟 AI 配置无关 ---- */}
 							<div className="card space-y-3 p-4 text-sm">
 								<div className="flex items-center gap-2">
-									<span aria-hidden>🐱</span>
+									<span aria-hidden>🌸</span>
 									<h4 className="font-semibold text-zinc-900 dark:text-zinc-100">
-										守盘小猫 · AI 对话
+										看板娘形象
+									</h4>
+								</div>
+								<p className="text-xs text-zinc-500">
+									点选即保存、刷新页面生效（不涉及任何 AI 配置）。形象为 Live2D
+									官方示例模型，© Live2D Inc.（免费素材许可，已在 README 致谢）
+								</p>
+								<div className="grid grid-cols-2 gap-1.5">
+									{[
+										["shizuku", "小滴 しずく"],
+										["zundamon", "豆团子 ずんだもん"],
+										["tororo", "山药猫 とろろ"],
+										["hijiki", "小黑狗 ひじき"],
+										["mao", "虹色麻欧 まお"],
+										["rice", "小饭团 ライス"],
+										["hiyori", "桃濑日和 ひより"],
+									].map(([key, label]) => (
+										<button
+											key={key}
+											type="button"
+											className={`rounded-lg border px-2 py-1.5 text-left text-xs transition ${
+												petModel === key
+													? "border-amber-500 bg-amber-50 font-medium text-amber-700 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300"
+													: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600"
+											}`}
+											onClick={() => handleSwitchPetModel(key)}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+								{petModelMessage && (
+									<p
+										className={`rounded-lg px-3 py-2 text-xs ${
+											petModelMessage.includes("已切换")
+												? "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400"
+												: "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400"
+										}`}
+									>
+										{petModelMessage}
+									</p>
+								)}
+							</div>
+
+							{/* ---- AI 对话：可选功能，独立配置独立保存 ---- */}
+							<div className="card space-y-3 p-4 text-sm">
+								<div className="flex items-center gap-2">
+									<span aria-hidden>💬</span>
+									<h4 className="font-semibold text-zinc-900 dark:text-zinc-100">
+										AI 对话（可选）
 									</h4>
 									<span
 										className={`badge ${
@@ -1574,43 +1625,10 @@ export function AdminPanel({
 									</span>
 								</div>
 								<p className="text-xs leading-relaxed text-zinc-500">
-									填一个 OpenAI 兼容接口，右下角的看板娘就能聊天了。所有访客都可以跟她对话；
-									API Key 只存在服务端（D1），浏览器全程接触不到。每 IP 10 分钟 15 条、单条回复
-									480 token 封顶，防止被薅。
+									填一个 OpenAI 兼容接口，看板娘就能聊天。不配置也不影响形象展示；
+									API Key 只存在服务端（D1），浏览器全程接触不到。每 IP 10 分钟 15 条、
+									单条回复 480 token 封顶，防止被薅。
 								</p>
-								{/* 形象选择（即时生效） */}
-								<div>
-									<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-										看板娘形象（Live2D 官方示例模型，点选即保存）
-									</label>
-									<div className="grid grid-cols-2 gap-1.5">
-										{[
-											["shizuku", "小滴 しずく"],
-											["zundamon", "豆团子 ずんだもん"],
-											["tororo", "山药猫 とろろ"],
-											["hijiki", "小黑狗 ひじき"],
-											["mao", "虹色麻欧 まお"],
-											["rice", "小饭团 ライス"],
-											["hiyori", "桃濑日和 ひより"],
-										].map(([key, label]) => (
-											<button
-												key={key}
-												type="button"
-												className={`rounded-lg border px-2 py-1.5 text-left text-xs transition ${
-													petModel === key
-														? "border-amber-500 bg-amber-50 font-medium text-amber-700 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300"
-														: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600"
-												}`}
-												onClick={() => handleSwitchPetModel(key)}
-											>
-												{label}
-											</button>
-										))}
-									</div>
-									<p className="mt-1 text-[11px] text-zinc-400">
-										模型 © Live2D Inc.（免费素材许可，需保留署名，已在 README 致谢）
-									</p>
-								</div>
 								<form className="space-y-3" onSubmit={handleSavePetConfig}>
 									<div>
 										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
