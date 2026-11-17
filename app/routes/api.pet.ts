@@ -19,6 +19,36 @@ interface PetAiConfig {
 }
 
 const SETTING_KEY = "pet_ai";
+/** 看板娘形象选择（key 须在服务端目录内，与前端 MODEL_CATALOG 保持一致） */
+const SETTING_KEY_MODEL = "pet_model";
+const PET_MODELS = [
+	"shizuku",
+	"zundamon",
+	"tororo",
+	"hijiki",
+	"mao",
+	"rice",
+	"hiyori",
+];
+const PET_MODEL_DEFAULT = "shizuku";
+
+async function getPetModel(db: D1Database): Promise<string> {
+	const row = await db
+		.prepare("SELECT value FROM app_settings WHERE key = ?")
+		.bind(SETTING_KEY_MODEL)
+		.first<{ value: string }>();
+	return row && PET_MODELS.includes(row.value) ? row.value : PET_MODEL_DEFAULT;
+}
+
+async function setPetModel(db: D1Database, key: string): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO app_settings (key, value) VALUES (?, ?) " +
+				"ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+		)
+		.bind(SETTING_KEY_MODEL, key)
+		.run();
+}
 
 /** 未自定义时的默认猫设——保持小猫人设与站点角色，避免被当成通用问答机滥用 */
 const DEFAULT_SYSTEM_PROMPT =
@@ -82,6 +112,9 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	const config = await readConfig(db);
 	return Response.json({
 		configured: !!config,
+		// 形象选择对全部访客可见（前端要按它加载模型）；叫 petModel 避免与管理员
+		// 视角的 LLM model 名撞车
+		petModel: await getPetModel(db),
 		// 完整配置只给管理员，且 key 只报有无、不回传本体
 		...(isAdmin && config
 			? {
@@ -102,12 +135,31 @@ export async function action({ request, context }: Route.ActionArgs) {
 	await initDatabase(db);
 	const { isAdmin } = await requireAuth(request, db);
 	const meta = getRequestMeta(request);
+	const body = (await request.json().catch(() => ({}))) as Record<string, any> &
+		PetAiConfig;
 
 	if (request.method === "PUT") {
 		if (!isAdmin) {
 			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
 		}
-		const body = (await request.json().catch(() => ({}))) as PetAiConfig & { apiKey?: string };
+		// 形象切换：可单独提交（{ petModel }），不触碰 AI 配置
+		if (typeof body.petModel === "string") {
+			if (!PET_MODELS.includes(body.petModel)) {
+				return Response.json({ error: "未知形象" }, { status: 400 });
+			}
+			await setPetModel(db, body.petModel);
+			await logAudit(db, {
+				action: "pet.config",
+				userType: "admin",
+				ip: meta.ip,
+				userAgent: meta.userAgent,
+				detail: { petModel: body.petModel },
+			});
+			// 没带 AI 字段就到此为止（形象即时生效）
+			if (!body.baseUrl && !body.model && !body.apiKey) {
+				return Response.json({ success: true });
+			}
+		}
 		const baseUrl = String(body.baseUrl || "").trim().replace(/\/+$/, "");
 		const model = String(body.model || "").trim();
 		const systemPrompt = String(body.systemPrompt || "").trim();

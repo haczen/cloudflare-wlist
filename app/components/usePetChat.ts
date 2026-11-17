@@ -19,17 +19,22 @@ export function usePetChat() {
 	const [messages, setMessages] = useState<PetChatMessage[]>([]);
 	const [waiting, setWaiting] = useState(false);
 	const [chatError, setChatError] = useState<string | null>(null);
+	/** 看板娘形象 key（管理员在管理面板切换）；probed = 探测请求已返回 */
+	const [modelKey, setModelKey] = useState("shizuku");
+	const [probed, setProbed] = useState(false);
 
 	// 探测 + 恢复记录（都在 effect 里，SSR 安全）
 	useEffect(() => {
 		fetch("/api/pet")
 			.then((r) => (r.ok ? r.json() : null))
-			.then((d: { configured?: boolean } | null) => {
+			.then((d: { configured?: boolean; petModel?: string } | null) => {
 				if (d?.configured) setAiConfigured(true);
+				if (d?.petModel) setModelKey(d.petModel);
 			})
 			.catch(() => {
 				/* 探测失败按未配置走，不影响戳一戳 */
-			});
+			})
+			.finally(() => setProbed(true));
 		try {
 			const saved = localStorage.getItem(CHAT_STORAGE_KEY);
 			if (saved) {
@@ -95,6 +100,8 @@ export function usePetChat() {
 		waiting,
 		chatError,
 		sendChat,
+		modelKey,
+		probed,
 		clearChat: () => {
 			setMessages([]);
 			setChatError(null);

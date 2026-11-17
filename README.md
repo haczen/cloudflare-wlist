@@ -165,3 +165,8 @@ app/
 ## 开源许可
 
 MIT
+
+## 致谢
+
+- 看板娘形象来自 [Live2D](https://www.live2d.com/) 官方示例模型（しずく / ずんだもん / とろろ・ひじき / まお / ライス / ひより），依据 [Live2D 免费素材许可协议](https://www.live2d.com/eula/live2d-open-software-license-agreement.html) 使用，© Live2D Inc.
+- Live2D 渲染基于 [pixi-live2d-display](https://github.com/guansss/pixi-live2d-display)（MIT）

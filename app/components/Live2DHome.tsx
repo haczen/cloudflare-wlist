@@ -33,15 +33,19 @@ const BUSY_PHRASES: string[] = [
 
 const ROOM_KEY = "wlist-pet-room-open";
 
-/** 自发玩耍的动作库（model.json 的动组名）+ 表情 */
-const PLAY_MOTION_GROUPS = [
-	"tap_body",
-	"shake",
-	"flick_head",
-	"pinch_in",
-	"pinch_out",
-];
-const EXPRESSIONS = ["f01", "f02", "f03", "f04"];
+/** 可选形象目录（管理员在管理面板切换；均为 Live2D 官方示例模型，
+ *  按 Live2D 免费素材许可使用——需保留署名，见 README 致谢节） */
+const MODEL_CATALOG = [
+	{ key: "shizuku", label: "小滴（しずく）", file: "/live2d/shizuku/shizuku.model.json", gen: 2 },
+	{ key: "zundamon", label: "豆团子（ずんだもん）", file: "/live2d/zundamon/zundamon.model3.json", gen: 4 },
+	{ key: "tororo", label: "山药猫（とろろ）", file: "/live2d/tororo/tororo.model3.json", gen: 4 },
+	{ key: "hijiki", label: "小黑狗（ひじき）", file: "/live2d/hijiki/hijiki.model3.json", gen: 4 },
+	{ key: "mao", label: "虹色麻欧（まお）", file: "/live2d/mao/mao_pro.model3.json", gen: 4 },
+	{ key: "rice", label: "小饭团（ライス）", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4 },
+	{ key: "hiyori", label: "桃濑日和（ひより）", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4 },
+] as const;
+
+/** 自发玩耍的动作组从模型清单动态取（各模型动组名不同，写死必翻车） */
 
 const STYLE = `
 @keyframes petroom-twinkle {
@@ -116,8 +120,13 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 	const [chatInput, setChatInput] = useState("");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const { aiConfigured, messages, waiting, chatError, sendChat, clearChat } =
+	const { aiConfigured, messages, waiting, chatError, sendChat, modelKey, probed, clearChat } =
 		usePetChat();
+	// 模型清单解析出的可玩动作组 / 表情名（各模型差异大，加载时提取）
+	const playGroupsRef = useRef<string[]>([]);
+	const exprNamesRef = useRef<string[]>([]);
+	/** 当前已触发加载的形象 key（防同 key 重复加载；cleanup 置空允许重载） */
+	const loadedKeyRef = useRef<string | null>(null);
 
 	// 房间开关：记住用户选择
 	useEffect(() => {
@@ -141,8 +150,16 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 	const playRandom = useCallback(() => {
 		const m = modelRef.current;
 		if (!m) return;
-		m.motion(PLAY_MOTION_GROUPS[Math.floor(Math.random() * PLAY_MOTION_GROUPS.length)]);
-		m.expression(EXPRESSIONS[Math.floor(Math.random() * EXPRESSIONS.length)]);
+		// 有动组（剔除 Idle——那是常驻待机）就随机挑一组；没动组的模型
+		// （如豆团子：动作全做在表情里）就纯换表情
+		const groups = playGroupsRef.current;
+		if (groups.length > 0) {
+			m.motion(groups[Math.floor(Math.random() * groups.length)]);
+		}
+		const exprs = exprNamesRef.current;
+		if (exprs.length > 0) {
+			m.expression(exprs[Math.floor(Math.random() * exprs.length)]);
+		}
 	}, []);
 
 	// 卸载清理
@@ -153,31 +170,57 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		};
 	}, []);
 
-	// 客户端状态就绪后加载模型（悬浮态也要显示人物，所以开不开房都加载）
+	// 客户端状态就绪后加载模型（悬浮态也要显示人物，所以开不开房都加载）。
+	// 探测返回的形象 key 变化时会重跑（管理员切形象 → 现场换人）。
+	// 注意 mode 不进 deps：setMode('live2d') 若触发重跑，cleanup 会把刚建好的画布销毁
 	useEffect(() => {
-		if (roomOpen === null || mode !== "loading") return;
+		if (roomOpen === null || !probed) return;
+		if (loadedKeyRef.current === modelKey) return; // 这只已加载/加载中
 		let disposed = false;
+		loadedKeyRef.current = modelKey;
 		(async () => {
 			try {
-				// 1) Cubism 2 官方 runtime（live2d.min.js 提供全局 Live2D，渲染库依赖）
-				if (!(window as unknown as { Live2D?: unknown }).Live2D) {
+				const cat =
+					MODEL_CATALOG.find((c) => c.key === modelKey) ?? MODEL_CATALOG[0];
+				// 1) 官方 runtime：Cubism4 = live2dcubismcore（全局 Live2DCubismCore），
+				//    Cubism2 = live2d.min.js（全局 Live2D）。都自托管，先按需注入
+				const w = window as unknown as {
+					Live2D?: unknown;
+					Live2DCubismCore?: unknown;
+				};
+				const needSrc =
+					cat.gen === 4
+						? w.Live2DCubismCore
+							? null
+							: "/live2d/core/live2dcubismcore.min.js"
+						: w.Live2D
+							? null
+							: "/live2d/core/live2d.min.js";
+				if (needSrc) {
 					await new Promise<void>((resolve, reject) => {
 						const s = document.createElement("script");
-						s.src = "/live2d/core/live2d.min.js";
+						s.src = needSrc;
 						s.onload = () => resolve();
-						s.onerror = () => reject(new Error("live2d.min.js 加载失败"));
+						s.onerror = () =>
+							reject(new Error(needSrc.split("/").pop() + " 加载失败"));
 						document.head.appendChild(s);
 					});
 				}
-				// 2) pixi + live2d 显示层（动态 import：SSR 无关、不进主 bundle；
-				//    0.4.0 主入口是全量包含 Cubism4 检查，须用 cubism2 子入口）
+				// 2) pixi + 显示层（动态 import；子入口按模型代别选——
+				//    0.4.0 主入口是全量包会同时检查两代 runtime）
 				const pixi = await import("pixi.js");
-				const { Live2DModel } = await import("pixi-live2d-display/cubism2");
+				const { Live2DModel } =
+					cat.gen === 4
+						? await import("pixi-live2d-display/cubism4")
+						: await import("pixi-live2d-display/cubism2");
 				// 库依赖 window.PIXI 暴露（Ticker / 注册表）
 				(window as unknown as { PIXI: unknown }).PIXI = pixi;
 				if (disposed || !stageRef.current) return;
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const PIXI = pixi as any;
+
+				// 重跑（切形象）时清掉旧画布
+				stageRef.current.replaceChildren();
 
 				const app = new PIXI.Application({
 					width: ROOM_W,
@@ -193,11 +236,10 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 
 				// autoInteract 关掉：内置自动交互走 pixi 废弃的 interaction 插件会抛错
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				const model = (await Live2DModel.from(
-					"/live2d/shizuku/shizuku.model.json",
-					{ autoInteract: false }
+				const model = (await Live2DModel.from(cat.file, {
+					autoInteract: false,
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				)) as any;
+				})) as any;
 				if (disposed) {
 					model.destroy?.();
 					app.destroy(true);
@@ -208,6 +250,24 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 				model.scale.set(TARGET_H / model.height);
 				model.position.set(ROOM_W * 0.54, FLOOR_TOP + 6);
 				app.stage.addChild(model);
+				// 从模型清单提取可玩动组 / 表情名（cubism4 与 cubism2 的清单结构不同）
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const settings = (model.settings ?? {}) as any;
+				const motionTable =
+					settings.FileReferences?.Motions ?? settings.motions ?? {};
+				playGroupsRef.current = Object.keys(motionTable).filter(
+					(k) =>
+						Array.isArray(motionTable[k]) &&
+						motionTable[k].length > 0 &&
+						k.toLowerCase() !== "idle"
+				);
+				const exprList =
+					settings.FileReferences?.Expressions ?? settings.expressions ?? [];
+				exprNamesRef.current = (Array.isArray(exprList) ? exprList : [])
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					.map((e: any) => e.Name ?? e.name)
+					.filter((n: unknown): n is string => typeof n === "string");
+
 				appRef.current = app;
 				modelRef.current = model;
 				// 调试句柄：线上量几何用（只读无害）
@@ -221,8 +281,13 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		})();
 		return () => {
 			disposed = true;
+			loadedKeyRef.current = null; // 允许下次重载
+			// 重跑（切形象）时销毁旧 app
+			appRef.current?.destroy();
+			appRef.current = null;
+			modelRef.current = null;
 		};
-	}, [roomOpen, mode]);
+	}, [roomOpen, probed, modelKey]);
 
 	// 灵动时钟：每 18~40s 自己挑个动作玩（换表情，三成概率冒台词）
 	useEffect(() => {

@@ -831,6 +831,7 @@ export function AdminPanel({
 		systemPrompt: "",
 	});
 	const [petConfigured, setPetConfigured] = useState(false);
+	const [petModel, setPetModel] = useState("shizuku");
 	const [petSaving, setPetSaving] = useState(false);
 	const [petMessage, setPetMessage] = useState<string | null>(null);
 
@@ -867,6 +868,7 @@ export function AdminPanel({
 				.then((response) =>
 					response.json() as Promise<{
 						configured?: boolean;
+						petModel?: string;
 						baseUrl?: string;
 						model?: string;
 						systemPrompt?: string;
@@ -874,6 +876,7 @@ export function AdminPanel({
 				)
 				.then((data) => {
 					setPetConfigured(!!data.configured);
+					if (data.petModel) setPetModel(data.petModel);
 					if (data.baseUrl && data.model) {
 						// key 永不回传：留空 = 保存时沿用
 						setPetForm((prev) => ({
@@ -888,6 +891,22 @@ export function AdminPanel({
 				.catch(() => { /* 读取失败按默认表单 */ });
 		}
 	}, [tab, auditAction]);
+
+	const handleSwitchPetModel = async (key: string) => {
+		setPetModel(key);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ petModel: key }),
+			});
+			if (!response.ok) throw new Error("切换失败");
+			setPetMessage(`已切换形象，刷新页面即可看到新的看板娘 ✨`);
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "切换失败");
+		}
+	};
 
 	const handleSavePetConfig = async (event: React.FormEvent) => {
 		event.preventDefault();
@@ -1555,10 +1574,43 @@ export function AdminPanel({
 									</span>
 								</div>
 								<p className="text-xs leading-relaxed text-zinc-500">
-									填一个 OpenAI 兼容接口，右下角的小猫就能聊天了。所有访客都可以跟她对话；
+									填一个 OpenAI 兼容接口，右下角的看板娘就能聊天了。所有访客都可以跟她对话；
 									API Key 只存在服务端（D1），浏览器全程接触不到。每 IP 10 分钟 15 条、单条回复
 									480 token 封顶，防止被薅。
 								</p>
+								{/* 形象选择（即时生效） */}
+								<div>
+									<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+										看板娘形象（Live2D 官方示例模型，点选即保存）
+									</label>
+									<div className="grid grid-cols-2 gap-1.5">
+										{[
+											["shizuku", "小滴 しずく"],
+											["zundamon", "豆团子 ずんだもん"],
+											["tororo", "山药猫 とろろ"],
+											["hijiki", "小黑狗 ひじき"],
+											["mao", "虹色麻欧 まお"],
+											["rice", "小饭团 ライス"],
+											["hiyori", "桃濑日和 ひより"],
+										].map(([key, label]) => (
+											<button
+												key={key}
+												type="button"
+												className={`rounded-lg border px-2 py-1.5 text-left text-xs transition ${
+													petModel === key
+														? "border-amber-500 bg-amber-50 font-medium text-amber-700 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300"
+														: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600"
+												}`}
+												onClick={() => handleSwitchPetModel(key)}
+											>
+												{label}
+											</button>
+										))}
+									</div>
+									<p className="mt-1 text-[11px] text-zinc-400">
+										模型 © Live2D Inc.（免费素材许可，需保留署名，已在 README 致谢）
+									</p>
+								</div>
 								<form className="space-y-3" onSubmit={handleSavePetConfig}>
 									<div>
 										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
