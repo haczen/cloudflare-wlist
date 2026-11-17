@@ -180,31 +180,50 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json({ error: "没有可回复的消息" }, { status: 400 });
 		}
 
-		const upstream = await fetch(`${config.baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${config.apiKey}`,
-			},
-			body: JSON.stringify({
-				model: config.model,
-				messages: [
-					{ role: "system", content: config.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT },
-					...history,
-				],
-				max_tokens: 480,
-				temperature: 0.8,
-			}),
-			signal: AbortSignal.timeout(30_000),
-		}).catch(() => null);
+		const payload = JSON.stringify({
+			model: config.model,
+			messages: [
+				{ role: "system", content: config.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT },
+				...history,
+			],
+			max_tokens: 480,
+			temperature: 0.8,
+		});
+		const call = (base: string) =>
+			fetch(`${base}/chat/completions`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${config.apiKey}`,
+				},
+				body: payload,
+				signal: AbortSignal.timeout(30_000),
+			}).catch(() => null);
 
+		let upstream = await call(config.baseUrl);
 		if (!upstream) {
 			return Response.json({ error: "上游网络不通（检查 Base URL / 模型名）" }, { status: 502 });
 		}
+		// OpenAI 兼容配置第一大坑：Base URL 少了 /v1 → 上游 403/404 或怪异报错。
+		// 这种情况自动补 /v1 重试一次，用户不必摸索
+		if (
+			!upstream.ok &&
+			(upstream.status === 403 || upstream.status === 404) &&
+			!/\/v1$/.test(config.baseUrl)
+		) {
+			const retry = await call(`${config.baseUrl}/v1`);
+			if (retry) upstream = retry;
+		}
 		if (!upstream.ok) {
 			const text = (await upstream.text().catch(() => "")).slice(0, 300);
+			const hint =
+				upstream.status === 404
+					? "（模型名或路径不对：确认模型 id 与 Base URL 是否以 /v1 结尾）"
+					: upstream.status === 401
+						? "（API Key 无效或已过期）"
+						: "";
 			return Response.json(
-				{ error: `上游返回 ${upstream.status}${text ? `：${text}` : ""}` },
+				{ error: `上游返回 ${upstream.status}${hint}${text ? `：${text}` : ""}` },
 				{ status: 502 }
 			);
 		}

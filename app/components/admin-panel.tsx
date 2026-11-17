@@ -1667,7 +1667,7 @@ export function AdminPanel({
 											onChange={(e) => setPetForm((p) => ({ ...p, baseUrl: e.target.value }))}
 										/>
 										<p className="mt-1 text-[11px] text-zinc-400">
-											DeepSeek / GLM / Kimi / OpenAI / 自建 Ollama 均可，一般以 /v1 结尾
+											DeepSeek / GLM / Kimi / OpenAI / 自建 Ollama / 各类中转均可；一般以 /v1 结尾（漏了会自动补试一次）
 										</p>
 									</div>
 									<div>
@@ -1676,7 +1676,7 @@ export function AdminPanel({
 										</label>
 										<input
 											className="input"
-											placeholder="deepseek-chat"
+											placeholder="deepseek-chat / glm-4.5 …"
 											value={petForm.model}
 											onChange={(e) => setPetForm((p) => ({ ...p, model: e.target.value }))}
 										/>
