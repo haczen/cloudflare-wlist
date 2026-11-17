@@ -1750,6 +1750,15 @@ export function AdminPanel({
 													type="button"
 													className="btn-outline flex-1"
 													disabled={petTesting}
+													onClick={handleListModels}
+												>
+													{petTesting && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+													可用模型
+												</button>
+												<button
+													type="button"
+													className="btn-outline flex-1"
+													disabled={petTesting}
 													onClick={handleTestPet}
 												>
 													{petTesting && <SpinnerIcon className="h-4 w-4 animate-spin" />}
