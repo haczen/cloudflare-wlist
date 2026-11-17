@@ -2369,6 +2369,10 @@ function useDarkMode() {
 		setIsDark(dark);
 	}, []);
 	const toggle = useCallback(() => {
+		// 切换前挂 theme-anim：全局色彩走 0.45s 过渡（见 app.css），不再生硬跳变
+		const root = document.documentElement;
+		root.classList.add("theme-anim");
+		window.setTimeout(() => root.classList.remove("theme-anim"), 650);
 		setIsDark((prev) => {
 			const next = !prev;
 			localStorage.setItem("wlist-theme", next ? "dark" : "light");
@@ -3071,6 +3075,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 				busy={uploadBusy}
 				modelKey={petModel}
 				aiConfigured={petAiConfigured}
+				dark={isDark}
 			/>
 
 			{showLogin && (

@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import SitePet from "./SitePet";
+import PetStand from "./PetStand";
 import { usePetChat } from "./usePetChat";
 
 /** 日常台词 */
@@ -30,20 +31,17 @@ const BUSY_PHRASES: string[] = [
 ];
 
 /** 可选形象（key 与服务端 PET_MODELS 一致）。
- *  h = 目标身高（逻辑 px）：各模型包围盒内空白差异大，per-model 调节视觉大小 */
+ *  h = 目标身高（逻辑 px）：各模型包围盒内空白差异大，per-model 调节视觉大小；
+ *  stand = 底座造型：cushion 坐垫 / nest 宠物小窝 */
 const MODEL_CATALOG = [
-	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260 },
-	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 300 },
-	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 300 },
-	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300 },
-	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 360 },
+	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260, stand: "cushion" },
+	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 270, stand: "nest" },
+	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 270, stand: "nest" },
+	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300, stand: "cushion" },
+	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 390, stand: "cushion" },
 ] as const;
 
 const STYLE = `
-@keyframes petstand-pulse {
-	0%, 100% { opacity: 0.55; transform: translateX(-50%) scale(1); }
-	50% { opacity: 0.9; transform: translateX(-50%) scale(1.04); }
-}
 @keyframes petstand-bubble-in {
 	0% { opacity: 0; transform: translateY(6px) scale(0.85); }
 	60% { opacity: 1; transform: translateY(-2px) scale(1.04); }
@@ -53,17 +51,9 @@ const STYLE = `
 	0% { opacity: 0; transform: translateY(8px) scale(0.97); }
 	100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-.petstand-pulse { animation: petstand-pulse 2.8s ease-in-out infinite; }
-@keyframes petstand-twinkle {
-	0%, 100% { opacity: 0.25; }
-	50% { opacity: 1; }
-}
-.petstand-twinkle { animation: petstand-twinkle 2.2s ease-in-out infinite; }
 .petstand-bubble-in { animation: petstand-bubble-in 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) 1 both; }
 .petstand-panel-in { animation: petstand-panel-in 0.22s cubic-bezier(0.34, 1.4, 0.64, 1) 1 both; }
 @media (prefers-reduced-motion: reduce) {
-	.petstand-pulse,
-	.petstand-twinkle,
 	.petstand-bubble-in,
 	.petstand-panel-in {
 		animation: none !important;
@@ -73,21 +63,24 @@ const STYLE = `
 
 /** 画布逻辑尺寸（人物坐标系）；悬浮态整体 CSS 缩小展示 */
 const STAGE_W = 320;
-const STAGE_H = 400;
-const FEET_Y = STAGE_H - 18; // 脚底（站在底座上沿）
-/** 悬浮形态整个画布的 CSS 缩放（0.72 → 最大的形象屏上约 240px 高） */
+const STAGE_H = 440;
+const FEET_Y = STAGE_H - 20; // 脚底（站在底座上沿；日和 390 高 → 头顶 30 不裁）
+/** 悬浮形态整个画布的 CSS 缩放（0.72 → 日和屏上约 281px 高） */
 const FLOAT_SCALE = 0.72;
 
 export default function Live2DHome({
 	busy,
 	modelKey,
 	aiConfigured,
+	dark,
 }: {
 	busy?: boolean;
 	/** home loader 服务端下发的形象 key（切换后刷新页面生效） */
 	modelKey: string;
 	/** home loader 服务端下发的 AI 是否已配置 */
 	aiConfigured: boolean;
+	/** 站点当前主题（底座 Canvas 按此补间日夜调色板） */
+	dark: boolean;
 }) {
 	// 'loading' = 决定用 Live2D 还是回退；'live2d' | 'svg'
 	const [mode, setMode] = useState<"loading" | "live2d" | "svg">("loading");
@@ -324,69 +317,13 @@ export default function Live2DHome({
 		>
 			<style>{STYLE}</style>
 
-			{/* 底座：坐垫式发光台座（渐变垫面/绣线内圈/受光高光/呼吸光晕/缘边小星），人物踩在上沿 */}
-			<div
-				className="pointer-events-none absolute left-1/2 z-0 -translate-x-1/2"
-				style={{
-					bottom: 0,
-					width: Math.round(cat.h * 0.5 * FLOAT_SCALE) * 2,
-					height: Math.round(52 * FLOAT_SCALE),
-				}}
-				aria-hidden="true"
-			>
-				{/* 白天款 */}
-				<svg viewBox="0 0 200 52" className="h-full w-full overflow-visible dark:hidden">
-					<defs>
-						<radialGradient id="petGlowD" cx="50%" cy="50%" r="50%">
-							<stop offset="0%" stopColor="rgba(251,191,36,0.5)" />
-							<stop offset="55%" stopColor="rgba(251,146,60,0.22)" />
-							<stop offset="100%" stopColor="rgba(251,146,60,0)" />
-						</radialGradient>
-						<linearGradient id="petCushionD" x1="0" y1="0" x2="0" y2="1">
-							<stop offset="0%" stopColor="#fff7e3" />
-							<stop offset="55%" stopColor="#fcd9a8" />
-							<stop offset="100%" stopColor="#efab5e" />
-						</linearGradient>
-					</defs>
-					{/* 地面软影 */}
-					<ellipse cx="100" cy="47" rx="84" ry="4.5" fill="rgba(120,72,20,0.22)" />
-					{/* 呼吸光晕 */}
-					<ellipse className="petstand-pulse" cx="100" cy="30" rx="82" ry="16" fill="url(#petGlowD)" />
-					{/* 坐垫主体 */}
-					<ellipse cx="100" cy="30" rx="70" ry="13" fill="url(#petCushionD)" stroke="#e8973f" strokeWidth="1.6" />
-					{/* 绣线内圈 */}
-					<ellipse cx="100" cy="30" rx="54" ry="9" fill="none" stroke="#fffaf0" strokeWidth="1.1" strokeDasharray="5 4" opacity="0.95" />
-					{/* 受光高光弧（左上） */}
-					<path d="M 42 26 A 70 13 0 0 1 100 17.5" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2.2" strokeLinecap="round" />
-					{/* 缘边小星 */}
-					<circle className="petstand-twinkle" cx="38" cy="28" r="1.7" fill="#fff" />
-					<circle className="petstand-twinkle" style={{ animationDelay: "1.1s" }} cx="163" cy="29" r="1.3" fill="#fff7ed" />
-					<circle className="petstand-twinkle" style={{ animationDelay: "2s" }} cx="128" cy="21" r="1" fill="#fff" />
-				</svg>
-				{/* 夜晚款 */}
-				<svg viewBox="0 0 200 52" className="hidden h-full w-full overflow-visible dark:block">
-					<defs>
-						<radialGradient id="petGlowN" cx="50%" cy="50%" r="50%">
-							<stop offset="0%" stopColor="rgba(251,191,36,0.34)" />
-							<stop offset="55%" stopColor="rgba(148,106,52,0.18)" />
-							<stop offset="100%" stopColor="rgba(148,106,52,0)" />
-						</radialGradient>
-						<linearGradient id="petCushionN" x1="0" y1="0" x2="0" y2="1">
-							<stop offset="0%" stopColor="#4b4258" />
-							<stop offset="55%" stopColor="#3a3344" />
-							<stop offset="100%" stopColor="#2b2633" />
-						</linearGradient>
-					</defs>
-					<ellipse cx="100" cy="47" rx="84" ry="4.5" fill="rgba(0,0,0,0.45)" />
-					<ellipse className="petstand-pulse" cx="100" cy="30" rx="82" ry="16" fill="url(#petGlowN)" />
-					<ellipse cx="100" cy="30" rx="70" ry="13" fill="url(#petCushionN)" stroke="#a97c3f" strokeWidth="1.6" />
-					<ellipse cx="100" cy="30" rx="54" ry="9" fill="none" stroke="#e7c58f" strokeWidth="1.1" strokeDasharray="5 4" opacity="0.55" />
-					<path d="M 42 26 A 70 13 0 0 1 100 17.5" fill="none" stroke="rgba(253,230,138,0.75)" strokeWidth="2.2" strokeLinecap="round" />
-					<circle className="petstand-twinkle" cx="38" cy="28" r="1.7" fill="#fde68a" />
-					<circle className="petstand-twinkle" style={{ animationDelay: "1.1s" }} cx="163" cy="29" r="1.3" fill="#fef3c7" />
-					<circle className="petstand-twinkle" style={{ animationDelay: "2s" }} cx="128" cy="21" r="1" fill="#fde68a" />
-				</svg>
-			</div>
+			{/* 底座：Canvas 手绘（坐垫/宠物小窝；日夜调色板逐帧补间，小窝前檐盖过脚边） */}
+			<PetStand
+				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 0.95 : 0.64))}
+				height={cat.stand === "nest" ? 56 : 42}
+				variant={cat.stand}
+				dark={isDark}
+			/>
 
 			{/* 聊天面板（AI 已配置，从她左侧弹出） */}
 			{chatOpen && aiConfigured && (
@@ -500,9 +437,9 @@ export default function Live2DHome({
 				</div>
 			)}
 
-			{/* 画布（人物；缩放锚定左上，底部对齐底座） */}
+			{/* 画布（人物；z-[5] 夹在底座背层 z-0 与小窝前檐 z-10 之间——猫狗坐进窝里） */}
 			<div
-				className="absolute left-0 top-0 origin-top-left"
+				className="absolute left-0 top-0 z-[5] origin-top-left"
 				style={{
 					width: STAGE_W,
 					height: STAGE_H,

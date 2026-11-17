@@ -2,6 +2,23 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* 主题切换过渡：仅在切换瞬间由 JS 给 <html> 挂 .theme-anim（650ms 后摘除），
+   避免常驻 transition 影响日常交互性能 */
+@media (prefers-reduced-motion: no-preference) {
+	html.theme-anim,
+	html.theme-anim *,
+	html.theme-anim *::before,
+	html.theme-anim *::after {
+		transition:
+			background-color 0.45s ease,
+			border-color 0.45s ease,
+			color 0.45s ease,
+			fill 0.45s ease,
+			stroke 0.45s ease,
+			box-shadow 0.45s ease !important;
+	}
+}
+
 @theme {
 	--font-sans: "Inter", "PingFang SC", "Microsoft YaHei", ui-sans-serif,
 		system-ui, -apple-system, "Segoe UI", Roboto, sans-serif,
