@@ -34,11 +34,13 @@ const BUSY_PHRASES: string[] = [
  *  h = 目标身高（逻辑 px）：各模型包围盒内空白差异大，per-model 调节视觉大小；
  *  stand = 底座造型：cushion 坐垫 / nest 宠物小窝 */
 const MODEL_CATALOG = [
-	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260, stand: "cushion" },
-	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 270, stand: "nest" },
-	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 270, stand: "nest" },
-	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300, stand: "cushion" },
-	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 390, stand: "cushion" },
+	// dx = 水平重心校正（逻辑 px）：实测"人物像素质心 vs 画布中心"，
+	// 饭团（rice）的包围盒内容整体偏右 70px，其余四只仅几像素
+	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260, stand: "cushion", dx: -3 },
+	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 270, stand: "nest", dx: -5 },
+	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 270, stand: "nest", dx: -4 },
+	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300, stand: "cushion", dx: -70 },
+	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 390, stand: "cushion", dx: -1 },
 ] as const;
 
 const STYLE = `
@@ -236,7 +238,7 @@ export default function Live2DHome({
 				const sink = cat.stand === "nest" ? 18 : 0;
 				model.anchor.set(0.5, 1); // 底部中心 = 落在底座上
 				model.scale.set(cat.h / model.height);
-				model.position.set(STAGE_W * 0.5, FEET_Y + sink);
+				model.position.set(STAGE_W * 0.5 + cat.dx, FEET_Y + sink);
 				app.stage.addChild(model);
 
 				// 从模型清单提取可玩动组 / 表情名（cubism4 与 cubism2 的清单结构不同）
@@ -370,8 +372,8 @@ export default function Live2DHome({
 
 			{/* 底座：Canvas 手绘（坐垫/宠物小窝；日夜调色板逐帧补间，小窝前檐盖过脚边） */}
 			<PetStand
-				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 1.18 : 0.64))}
-				height={cat.stand === "nest" ? 88 : 42}
+				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 1.04 : 0.64))}
+				height={cat.stand === "nest" ? 76 : 42}
 				variant={cat.stand}
 				dark={dark}
 			/>

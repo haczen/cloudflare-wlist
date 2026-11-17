@@ -284,7 +284,7 @@ function drawNestBack(
 	const cy = h * 0.5;
 	const rx = w * 0.42;
 	const ry = h * 0.4;
-	const rimT = ry * 0.72; // 绒面圆边的厚度
+	const rimT = ry * 0.6; // 绒面圆边的厚度
 	// 地面软影
 	ctx.beginPath();
 	ctx.ellipse(cx, cy + ry * 0.78, rx * 1.1, ry * 0.36, 0, 0, Math.PI * 2);
@@ -385,7 +385,7 @@ function drawNestFront(
 	const cy = h * 0.5;
 	const rx = w * 0.42;
 	const ry = h * 0.4;
-	const rimT = ry * 0.72;
+	const rimT = ry * 0.6;
 	// 前檐：整条下半个绒面环（更厚更高——把人物的脚和小腿裹进去）
 	ctx.save();
 	const grad = ctx.createLinearGradient(0, cy, 0, cy + ry);

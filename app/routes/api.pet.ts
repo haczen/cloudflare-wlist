@@ -160,7 +160,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 			);
 		}
 
-		const chatBody = (await request.json().catch(() => ({}))) as {
+		// 注意：body 已在 action 顶部解析过一次——Request body 只能读一次，
+		// 这里再 request.json() 会抛错被 catch 成空对象 → 消息列表恒空 →
+		// 一直报「没有可回复的消息」（此前线上就是这个 bug）
+		const chatBody = body as {
 			messages?: Array<{ role?: string; content?: string }>;
 		};
 		// 上下文钳制：只认 user/assistant、最多最近 10 条、单条 1500 字
