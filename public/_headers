@@ -1,0 +1,9 @@
+# Workers Assets 自定义缓存头（放 assets 目录即 public/ 生效）
+# Live2D 模型文件内容稳定（换模型=换目录名），给一天强缓存——
+# 否则默认 max-age=0,must-revalidate 每次进页都要逐文件回源校验，出场被代理往返拖慢
+/live2d/*
+  Cache-Control: public, max-age=86400
+
+# 构建产物带内容哈希，可放心长缓存
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
