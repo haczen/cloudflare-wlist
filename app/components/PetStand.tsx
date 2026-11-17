@@ -57,34 +57,34 @@ const CUSHION_NIGHT: Palette = {
 	weave: [150, 116, 78, 0.4],
 };
 const NEST_DAY: Palette = {
-	shadow: [110, 66, 24, 0.26],
+	shadow: [110, 66, 24, 0.24],
 	glowA: [251, 191, 36, 0.42],
 	glowB: [244, 131, 86, 0.18],
-	top: [233, 186, 129, 1],
-	mid: [207, 143, 85, 1],
-	bottom: [166, 100, 54, 1],
-	rim: [156, 95, 48, 1],
-	stitch: [255, 240, 214, 0.8],
-	hl: [255, 235, 200, 0.85],
-	cushionA: [255, 235, 242, 1],
-	cushionB: [244, 196, 211, 1],
-	paw: [224, 118, 148, 1],
-	weave: [150, 100, 55, 0.55],
+	top: [255, 238, 227, 1],
+	mid: [253, 216, 196, 1],
+	bottom: [245, 183, 160, 1],
+	rim: [226, 148, 122, 1],
+	stitch: [255, 255, 255, 0.95],
+	hl: [255, 244, 235, 0.9],
+	cushionA: [255, 247, 242, 1],
+	cushionB: [250, 216, 202, 1],
+	paw: [230, 120, 150, 1],
+	weave: [216, 150, 128, 0.55],
 };
 const NEST_NIGHT: Palette = {
 	shadow: [0, 0, 0, 0.5],
 	glowA: [251, 191, 36, 0.24],
 	glowB: [150, 108, 60, 0.12],
-	top: [92, 80, 96, 1],
-	mid: [72, 62, 76, 1],
-	bottom: [52, 45, 58, 1],
-	rim: [138, 106, 69, 1],
-	stitch: [231, 197, 143, 0.4],
-	hl: [253, 230, 138, 0.55],
-	cushionA: [94, 78, 92, 1],
-	cushionB: [64, 53, 68, 1],
-	paw: [190, 140, 162, 0.9],
-	weave: [120, 96, 70, 0.45],
+	top: [92, 76, 88, 1],
+	mid: [74, 60, 72, 1],
+	bottom: [56, 46, 56, 1],
+	rim: [142, 100, 96, 1],
+	stitch: [255, 226, 208, 0.5],
+	hl: [253, 230, 200, 0.6],
+	cushionA: [100, 82, 92, 1],
+	cushionB: [68, 55, 66, 1],
+	paw: [200, 140, 160, 0.9],
+	weave: [126, 96, 88, 0.5],
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -268,7 +268,7 @@ function drawCushion(
 	twinkle(ctx, cx + rx * 0.4, cy - ry * 0.85, 1, phase, 2, reduced, p);
 }
 
-// ---------- 宠物小窝 ----------
+// ---------- 宠物小窝（软乎乎绒面圆床） ----------
 
 function drawNestBack(
 	ctx: CanvasRenderingContext2D,
@@ -280,66 +280,98 @@ function drawNestBack(
 	phase: number,
 	reduced: boolean
 ) {
-	const cy = h * 0.52;
-	const rx = w * 0.4;
-	const ry = h * 0.34;
+	const cy = h * 0.5;
+	const rx = w * 0.42;
+	const ry = h * 0.4;
+	const rimT = ry * 0.62; // 绒面圆边的厚度
 	// 地面软影
 	ctx.beginPath();
-	ctx.ellipse(cx, cy + ry * 0.8, rx * 1.12, ry * 0.4, 0, 0, Math.PI * 2);
+	ctx.ellipse(cx, cy + ry * 0.78, rx * 1.1, ry * 0.36, 0, 0, Math.PI * 2);
 	ctx.fillStyle = css(p.shadow);
 	ctx.fill();
 	// 呼吸暖光
-	const gr = ctx.createRadialGradient(cx, cy, rx * 0.2, cx, cy, rx * 1.4);
+	const gr = ctx.createRadialGradient(cx, cy, rx * 0.2, cx, cy, rx * 1.45);
 	gr.addColorStop(0, css(p.glowA));
 	gr.addColorStop(0.6, css(p.glowB));
 	gr.addColorStop(1, "rgba(0,0,0,0)");
 	ctx.globalAlpha = breath;
 	ctx.beginPath();
-	ctx.ellipse(cx, cy, rx * 1.4, ry * 1.7, 0, 0, Math.PI * 2);
+	ctx.ellipse(cx, cy, rx * 1.45, ry * 1.6, 0, 0, Math.PI * 2);
 	ctx.fillStyle = gr;
 	ctx.fill();
 	ctx.globalAlpha = 1;
-	// 篮筐外体
+
+	// ---- 绒面圆边（甜甜圈环）：外椭圆 - 内椭圆（even-odd） ----
 	const lin = ctx.createLinearGradient(0, cy - ry, 0, cy + ry);
 	lin.addColorStop(0, css(p.top));
 	lin.addColorStop(0.55, css(p.mid));
 	lin.addColorStop(1, css(p.bottom));
 	ctx.beginPath();
 	ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+	ctx.ellipse(cx, cy - rimT * 0.28, rx - rimT, ry - rimT * 0.8, 0, 0, Math.PI * 2);
 	ctx.fillStyle = lin;
-	ctx.fill();
-	ctx.lineWidth = 1.6;
+	ctx.fill("evenodd");
+	ctx.lineWidth = 1.4;
 	ctx.strokeStyle = css(p.rim);
-	ctx.stroke();
-	// 编织纹：沿外圈几道同心弧
-	ctx.save();
 	ctx.beginPath();
 	ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-	ctx.clip();
-	for (let i = 1; i <= 3; i++) {
+	ctx.stroke();
+
+	// ---- 松软的分段褶线（12 道径向缝，可见） ----
+	for (let i = 0; i < 12; i++) {
+		const a = (i / 12) * Math.PI * 2 + Math.PI / 12;
+		const x1 = cx + Math.cos(a) * (rx - rimT * 0.85);
+		const y1 = cy - rimT * 0.28 + Math.sin(a) * (ry - rimT * 0.68);
+		const x2 = cx + Math.cos(a) * (rx - rimT * 0.08);
+		const y2 = cy + Math.sin(a) * (ry - rimT * 0.04);
 		ctx.beginPath();
-		ctx.ellipse(cx, cy, rx * (1 - i * 0.16), ry * (1 - i * 0.14), 0, 0, Math.PI * 2);
-		ctx.setLineDash([7, 6]);
-		ctx.lineWidth = 1;
+		ctx.moveTo(x1, y1);
+		ctx.lineTo(x2, y2);
+		ctx.lineWidth = 1.6;
 		ctx.strokeStyle = css(p.weave);
 		ctx.stroke();
 	}
+	// ---- 环中一圈粗缝线（虚线段，明显可见）----
+	ctx.beginPath();
+	ctx.ellipse(cx, cy - rimT * 0.14, rx - rimT * 0.48, ry - rimT * 0.42, 0, 0, Math.PI * 2);
+	ctx.setLineDash([7, 5]);
+	ctx.lineWidth = 2.4;
+	ctx.lineCap = "round";
+	ctx.strokeStyle = css(p.stitch);
+	ctx.stroke();
 	ctx.setLineDash([]);
-	ctx.restore();
-	// 窝内软垫
-	const rg = ctx.createRadialGradient(cx, cy - ry * 0.1, ry * 0.1, cx, cy, rx * 0.8);
+	// ---- 环上软高光（左上 + 顶部鼓起）----
+	ctx.beginPath();
+	ctx.ellipse(cx, cy - rimT * 0.12, rx - rimT * 0.5, ry - rimT * 0.44, 0, Math.PI * 1.06, Math.PI * 1.5);
+	ctx.lineWidth = 3;
+	ctx.strokeStyle = css(p.hl);
+	ctx.stroke();
+	// ---- 窝内软垫（下沉的柔软内芯）----
+	const rg = ctx.createRadialGradient(
+		cx,
+		cy - rimT * 0.35,
+		ry * 0.08,
+		cx,
+		cy - rimT * 0.2,
+		(rx - rimT) * 0.95
+	);
 	rg.addColorStop(0, css(p.cushionA));
 	rg.addColorStop(1, css(p.cushionB));
 	ctx.beginPath();
-	ctx.ellipse(cx, cy - ry * 0.05, rx * 0.74, ry * 0.68, 0, 0, Math.PI * 2);
+	ctx.ellipse(cx, cy - rimT * 0.28, rx - rimT, ry - rimT * 0.8, 0, 0, Math.PI * 2);
 	ctx.fillStyle = rg;
 	ctx.fill();
-	// 内沿阴影（窝壁压出的暗边）
+	// 内芯压痕（内沿一圈淡影）
 	ctx.beginPath();
-	ctx.ellipse(cx, cy - ry * 0.05, rx * 0.74, ry * 0.68, 0, Math.PI * 1.05, Math.PI * 1.95);
-	ctx.lineWidth = 3;
-	ctx.strokeStyle = css(p.shadow);
+	ctx.ellipse(cx, cy - rimT * 0.28, rx - rimT * 0.96, ry - rimT * 0.74, 0, Math.PI * 1.02, Math.PI * 1.98);
+	ctx.lineWidth = 4;
+	ctx.strokeStyle = css(p.weave);
+	ctx.globalAlpha = 0.35;
 	ctx.stroke();
+	ctx.globalAlpha = 1;
+	// 缘边闪星
+	twinkle(ctx, cx - rx * 0.82, cy - ry * 0.24, 1.5, phase, 0.3, reduced, p);
+	twinkle(ctx, cx + rx * 0.85, cy - ry * 0.3, 1.2, phase, 1.4, reduced, p);
 }
 
 function drawNestFront(
@@ -349,49 +381,75 @@ function drawNestFront(
 	h: number,
 	p: Palette
 ) {
-	const cy = h * 0.52;
-	const rx = w * 0.4;
-	const ry = h * 0.34;
-	// 前檐：下半环的厚月牙（外椭圆下半 - 内椭圆下半）
-	const rimThick = ry * 0.42;
+	const cy = h * 0.5;
+	const rx = w * 0.42;
+	const ry = h * 0.4;
+	const rimT = ry * 0.62;
+	// 前檐：整条下半个绒面环（更厚更高——把人物的脚和小腿裹进去）
 	ctx.save();
-	const grad = ctx.createLinearGradient(0, cy, 0, cy + ry + rimThick * 0.4);
+	const grad = ctx.createLinearGradient(0, cy, 0, cy + ry);
 	grad.addColorStop(0, css(p.mid));
-	grad.addColorStop(1, css(p.bottom));
+	grad.addColorStop(0.6, css(p.bottom));
+	grad.addColorStop(1, css(p.rim));
 	ctx.beginPath();
-	// 外弧（左→右经过底部）
 	ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI);
-	// 内弧（右→左回，稍微抬高）
-	ctx.ellipse(cx, cy - rimThick * 0.3, rx - rimThick * 0.6, ry - rimThick * 0.5, 0, Math.PI, true);
+	// 内弧回描：抬高到几乎水平中线，形成深兜
+	ctx.ellipse(
+		cx,
+		cy - rimT * 0.15,
+		rx - rimT * 0.9,
+		ry - rimT * 0.72,
+		0,
+		Math.PI,
+		true
+	);
 	ctx.closePath();
 	ctx.fillStyle = grad;
 	ctx.fill();
 	ctx.lineWidth = 1.4;
 	ctx.strokeStyle = css(p.rim);
 	ctx.stroke();
+	// 前檐缝线（与后层同款虚线，视觉连续）
+	ctx.beginPath();
+	ctx.ellipse(
+		cx,
+		cy + rimT * 0.2,
+		rx - rimT * 0.45,
+		ry - rimT * 0.42,
+		0.15,
+		Math.PI * 0.1,
+		Math.PI * 0.9
+	);
+	ctx.setLineDash([7, 5]);
+	ctx.lineWidth = 2.2;
+	ctx.lineCap = "round";
+	ctx.strokeStyle = css(p.stitch);
+	ctx.stroke();
+	ctx.setLineDash([]);
 	// 前檐上沿高光
 	ctx.beginPath();
-	ctx.ellipse(cx, cy - rimThick * 0.3, rx - rimThick * 0.6, ry - rimThick * 0.5, 0, Math.PI * 0.12, Math.PI * 0.88);
-	ctx.lineWidth = 2;
-	ctx.lineCap = "round";
+	ctx.ellipse(
+		cx,
+		cy - rimT * 0.15,
+		rx - rimT * 0.9,
+		ry - rimT * 0.72,
+		0,
+		Math.PI * 0.15,
+		Math.PI * 0.85
+	);
+	ctx.lineWidth = 2.2;
 	ctx.strokeStyle = css(p.hl);
 	ctx.stroke();
-	// 前檐小肉爪印
-	const px = cx;
-	const py = cy + ry * 0.62;
+	// 前檐正中绣一颗小爱心
+	const hx = cx;
+	const hy = cy + ry * 0.52;
+	const hs = Math.max(3.4, w * 0.022);
 	ctx.fillStyle = css(p.paw);
 	ctx.beginPath();
-	ctx.ellipse(px, py, 4.2, 3.2, 0, 0, Math.PI * 2);
+	ctx.moveTo(hx, hy + hs * 0.9);
+	ctx.bezierCurveTo(hx - hs * 1.5, hy - hs * 0.2, hx - hs * 0.6, hy - hs * 1.2, hx, hy - hs * 0.35);
+	ctx.bezierCurveTo(hx + hs * 0.6, hy - hs * 1.2, hx + hs * 1.5, hy - hs * 0.2, hx, hy + hs * 0.9);
 	ctx.fill();
-	for (const [dx, dy, r] of [
-		[-4.6, -4.4, 1.7],
-		[0, -5.6, 1.8],
-		[4.6, -4.4, 1.7],
-	] as const) {
-		ctx.beginPath();
-		ctx.arc(px + dx, py + dy, r, 0, Math.PI * 2);
-		ctx.fill();
-	}
 	ctx.restore();
 }
 

@@ -223,10 +223,12 @@ export default function Live2DHome({
 					app.destroy(true);
 					return;
 				}
-				// 按模型固有尺寸动态缩放 + per-model 目标身高（包围盒内空白差异大）
-				model.anchor.set(0.5, 1); // 底部中心 = 站在底座上
+				// 按模型固有尺寸动态缩放 + per-model 目标身高（包围盒内空白差异大）。
+				// 宠物窝造型再下沉一点——脚和小腿埋进窝里，配合前檐遮挡形成"坐进去"的实感
+				const sink = cat.stand === "nest" ? 16 : 0;
+				model.anchor.set(0.5, 1); // 底部中心 = 落在底座上
 				model.scale.set(cat.h / model.height);
-				model.position.set(STAGE_W * 0.5, FEET_Y);
+				model.position.set(STAGE_W * 0.5, FEET_Y + sink);
 				app.stage.addChild(model);
 
 				// 从模型清单提取可玩动组 / 表情名（cubism4 与 cubism2 的清单结构不同）
@@ -319,8 +321,8 @@ export default function Live2DHome({
 
 			{/* 底座：Canvas 手绘（坐垫/宠物小窝；日夜调色板逐帧补间，小窝前檐盖过脚边） */}
 			<PetStand
-				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 0.95 : 0.64))}
-				height={cat.stand === "nest" ? 56 : 42}
+				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 1.0 : 0.64))}
+				height={cat.stand === "nest" ? 74 : 42}
 				variant={cat.stand}
 				dark={dark}
 			/>

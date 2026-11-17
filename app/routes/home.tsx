@@ -1,5 +1,6 @@
 import type { Route } from "./+types/home";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useRevalidator } from "react-router";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -2354,35 +2355,96 @@ function FileBrowser({
 	);
 }
 
-// ---------- 深色模式 ----------
+// ---------- 主题：浅色 / 深色 / 自动跟随系统，切换带雾化过渡 ----------
+
+type ThemeMode = "light" | "dark" | "auto";
 
 function useDarkMode() {
+	const [mode, setMode] = useState<ThemeMode>("auto");
 	const [isDark, setIsDark] = useState(false);
+
+	// 初始：读存储（默认 auto），auto 时跟系统
 	useEffect(() => {
 		const saved = localStorage.getItem("wlist-theme");
-		const dark =
-			saved === "dark"
-				? true
-				: saved === "light"
-					? false
-					: window.matchMedia("(prefers-color-scheme: dark)").matches;
-		setIsDark(dark);
+		const m: ThemeMode =
+			saved === "dark" || saved === "light" ? saved : "auto";
+		setMode(m);
+		setIsDark(m === "dark" || (m === "auto" && systemDark()));
 	}, []);
-	const toggle = useCallback(() => {
-		// 切换前挂 theme-anim：全局色彩走 0.45s 过渡（见 app.css），不再生硬跳变
-		const root = document.documentElement;
-		root.classList.add("theme-anim");
-		window.setTimeout(() => root.classList.remove("theme-anim"), 650);
-		setIsDark((prev) => {
-			const next = !prev;
-			localStorage.setItem("wlist-theme", next ? "dark" : "light");
+
+	// auto 模式下监听系统切换
+	useEffect(() => {
+		if (mode !== "auto") return;
+		const mq = window.matchMedia("(prefers-color-scheme: dark)");
+		const onChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
+		mq.addEventListener("change", onChange);
+		return () => mq.removeEventListener("change", onChange);
+	}, [mode]);
+
+	// 点按钮循环：浅 → 深 → 自动 → 浅……
+	const cycle = useCallback(() => {
+		setMode((prev) => {
+			const next: ThemeMode =
+				prev === "light" ? "dark" : prev === "dark" ? "auto" : "light";
+			localStorage.setItem("wlist-theme", next);
+			applyTheme(next, setIsDark);
 			return next;
 		});
 	}, []);
+
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", isDark);
 	}, [isDark]);
-	return { isDark, toggle };
+	return { mode, isDark, toggle: cycle };
+}
+
+function systemDark(): boolean {
+	return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+/** 换主题：优先雾化过渡（View Transitions，旧画面模糊淡出=雾散）；
+ *  不支持的浏览器退回 CSS 色彩过渡（.theme-anim）。
+ *  连点保护：新切换先 skip 掉未完成的旧过渡（否则旧 transition 的 promise
+ *  以 AbortError 拒绝 → 控制台报未处理异常） */
+let activeViewTransition: { skipTransition?: () => void } | null = null;
+
+function applyTheme(
+	next: ThemeMode,
+	setIsDark: (v: boolean) => void
+): void {
+	const target = next === "dark" || (next === "auto" && systemDark());
+	const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	const flip = () => flushSync(() => setIsDark(target));
+	const doc = document as Document & {
+		startViewTransition?: (cb: () => void) => {
+			skipTransition?: () => void;
+			ready?: Promise<void>;
+			finished?: Promise<void>;
+			updateCallbackDone?: Promise<void>;
+		};
+	};
+	if (typeof doc.startViewTransition === "function" && !reduced) {
+		try {
+			activeViewTransition?.skipTransition?.();
+		} catch {
+			/* 旧过渡可能已结束 */
+		}
+		const vt = doc.startViewTransition(flip);
+		activeViewTransition = vt;
+		// skip 会同时拒绝 ready/finished/updateCallbackDone 三个 promise，
+		// 全部吞掉，避免未处理拒绝刷屏
+		for (const p of [vt.ready, vt.finished, vt.updateCallbackDone]) {
+			p?.catch(() => {});
+		}
+		vt.finished?.finally(() => {
+			if (activeViewTransition === vt) activeViewTransition = null;
+		});
+	} else {
+		const root = document.documentElement;
+		root.classList.add("theme-anim");
+		window.setTimeout(() => root.classList.remove("theme-anim"), 650);
+		flip();
+	}
 }
 
 // ---------- 侧边栏目录树 ----------
@@ -2578,7 +2640,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 		petAiConfigured,
 	} = loaderData;
 	const revalidator = useRevalidator();
-	const { isDark, toggle: toggleDark } = useDarkMode();
+	const { mode: themeMode, isDark, toggle: toggleDark } = useDarkMode();
 
 	const [target, setTarget] = useState<{
 		storageId: number;
@@ -2844,13 +2906,24 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 					<button
 						type="button"
 						className="btn-ghost !px-2"
-						title={isDark ? "切换到浅色" : "切换到深色"}
+						title={
+							themeMode === "light"
+								? "主题：浅色（点切换深色）"
+								: themeMode === "dark"
+									? "主题：深色（点切换自动）"
+									: "主题：自动跟随系统（点切换浅色）"
+						}
 						onClick={toggleDark}
 					>
-						{isDark ? (
+						{themeMode === "light" ? (
 							<SunIcon className="h-4 w-4" />
-						) : (
+						) : themeMode === "dark" ? (
 							<MoonIcon className="h-4 w-4" />
+						) : (
+							<span className="relative inline-flex h-4 w-4 items-center justify-center">
+								<SunIcon className="absolute left-0 h-2.5 w-2.5" />
+								<MoonIcon className="absolute right-0 h-2.5 w-2.5" />
+							</span>
 						)}
 					</button>
 

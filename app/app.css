@@ -2,7 +2,7 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* 主题切换过渡：仅在切换瞬间由 JS 给 <html> 挂 .theme-anim（650ms 后摘除），
+/* 主题切换过渡（兜底）：仅在切换瞬间由 JS 给 <html> 挂 .theme-anim（650ms 后摘除），
    避免常驻 transition 影响日常交互性能 */
 @media (prefers-reduced-motion: no-preference) {
 	html.theme-anim,
@@ -16,6 +16,45 @@
 			fill 0.45s ease,
 			stroke 0.45s ease,
 			box-shadow 0.45s ease !important;
+	}
+}
+
+/* 雾化过渡（主路径）：View Transitions 快照间做"雾散/雾起"的模糊溶解。
+   旧画面模糊化淡出（像被雾吞没），新画面从雾中浮现 */
+::view-transition-old(root) {
+	animation: wlist-fog-out 0.62s ease both;
+}
+::view-transition-new(root) {
+	animation: wlist-fog-in 0.62s ease both;
+}
+@keyframes wlist-fog-out {
+	0% {
+		opacity: 1;
+		filter: blur(0) saturate(1);
+		transform: scale(1);
+	}
+	100% {
+		opacity: 0;
+		filter: blur(20px) saturate(0.85);
+		transform: scale(1.015);
+	}
+}
+@keyframes wlist-fog-in {
+	0% {
+		opacity: 0;
+		filter: blur(20px) saturate(0.85);
+		transform: scale(0.995);
+	}
+	100% {
+		opacity: 1;
+		filter: blur(0) saturate(1);
+		transform: scale(1);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation: none !important;
 	}
 }
 
