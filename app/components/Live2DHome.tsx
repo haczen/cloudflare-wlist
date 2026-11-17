@@ -1,13 +1,11 @@
 /**
- * 守盘小窝：看板娘（Live2D Shizuku）+ 可展开的小房间
- * - 默认形态：人物直接漂在页面右下角（透明底、约 120px Q 版身形），
- *   不需要点开小屋就能看到她——点头像互动、鼠标划过她眼睛跟着看
- * - 🏠 小按钮展开迷你房间（纯 CSS/SVG：暖墙/木地板/窗日月切换/台灯/盆栽/相框/地毯），
- *   日夜跟随站点主题；再点收起回到悬浮形态
- * - 灵动性：待机动作自动播；每 18~40 秒随机挑一个舞蹈/小动作自己玩，
- *   换随机表情、偶尔冒一句台词
- * - AI（管理面板配置后）：💬 和她聊天，走 /api/pet 服务端代理（key 不出服务端）
- * - 模型加载失败 / WebGL 不可用 → 回退 SVG 守盘小猫（SitePet）
+ * 守盘看板娘：悬浮在页面右下角的 Live2D 形象（无房间装饰）
+ * - 形象 / AI 开关由 home loader 服务端直读下发（无探测请求，出场快一步）
+ * - 加载链并行化：runtime 脚本与渲染库同时拉，失败回退 SVG 守盘小猫（SitePet）
+ * - 底座：发光椭圆台座（渐变+描边，日夜两套配色），人物站在上面不悬空
+ * - 灵动性：待机动作自动播；每 18~40 秒随机挑动作/表情自己玩，35% 概率冒台词
+ * - 点击=互动（随机动作+表情+台词）；鼠标划过视线跟随
+ * - AI 配置后 💬 聊天面板，走 /api/pet 服务端代理（key 不出服务端）
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import SitePet from "./SitePet";
@@ -31,76 +29,62 @@ const BUSY_PHRASES: string[] = [
 	"传输中…我随时待命",
 ];
 
-const ROOM_KEY = "wlist-pet-room-open";
-
-/** 可选形象目录（管理员在管理面板切换；均为 Live2D 官方示例模型，
- *  按 Live2D 免费素材许可使用——需保留署名，见 README 致谢节） */
+/** 可选形象（key 与服务端 PET_MODELS 一致）。
+ *  h = 目标身高（逻辑 px）：各模型包围盒内空白差异大，per-model 调节视觉大小 */
 const MODEL_CATALOG = [
-	{ key: "shizuku", label: "小滴（しずく）", file: "/live2d/shizuku/shizuku.model.json", gen: 2 },
-	{ key: "zundamon", label: "豆团子（ずんだもん）", file: "/live2d/zundamon/zundamon.model3.json", gen: 4 },
-	{ key: "tororo", label: "山药猫（とろろ）", file: "/live2d/tororo/tororo.model3.json", gen: 4 },
-	{ key: "hijiki", label: "小黑狗（ひじき）", file: "/live2d/hijiki/hijiki.model3.json", gen: 4 },
-	{ key: "mao", label: "虹色麻欧（まお）", file: "/live2d/mao/mao_pro.model3.json", gen: 4 },
-	{ key: "rice", label: "小饭团（ライス）", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4 },
-	{ key: "hiyori", label: "桃濑日和（ひより）", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4 },
+	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260 },
+	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 330 },
+	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 330 },
+	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300 },
+	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 320 },
 ] as const;
 
-/** 自发玩耍的动作组从模型清单动态取（各模型动组名不同，写死必翻车） */
-
 const STYLE = `
-@keyframes petroom-twinkle {
-	0%, 100% { opacity: 0.25; }
-	50% { opacity: 1; }
+@keyframes petstand-pulse {
+	0%, 100% { opacity: 0.55; transform: translateX(-50%) scale(1); }
+	50% { opacity: 0.9; transform: translateX(-50%) scale(1.04); }
 }
-@keyframes petroom-lamp-glow {
-	0%, 100% { opacity: 0.55; }
-	50% { opacity: 0.9; }
-}
-@keyframes petroom-shooting {
-	0% { transform: translate(0, 0) rotate(-35deg); opacity: 0; }
-	6% { opacity: 1; }
-	40% { transform: translate(-46px, 32px) rotate(-35deg); opacity: 0; }
-	100% { transform: translate(-46px, 32px) rotate(-35deg); opacity: 0; }
-}
-@keyframes petroom-bubble-in {
+@keyframes petstand-bubble-in {
 	0% { opacity: 0; transform: translateY(6px) scale(0.85); }
 	60% { opacity: 1; transform: translateY(-2px) scale(1.04); }
 	100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-@keyframes petroom-panel-in {
+@keyframes petstand-panel-in {
 	0% { opacity: 0; transform: translateY(8px) scale(0.97); }
 	100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-.petroom-star { animation: petroom-twinkle 2.6s ease-in-out infinite; }
-.petroom-lamp-glow { animation: petroom-lamp-glow 3.2s ease-in-out infinite; }
-.petroom-shooting { animation: petroom-shooting 5s linear infinite; }
-.petroom-bubble-in { animation: petroom-bubble-in 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) 1 both; }
-.petroom-panel-in { animation: petroom-panel-in 0.22s cubic-bezier(0.34, 1.4, 0.64, 1) 1 both; }
+.petstand-pulse { animation: petstand-pulse 2.8s ease-in-out infinite; }
+.petstand-bubble-in { animation: petstand-bubble-in 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) 1 both; }
+.petstand-panel-in { animation: petstand-panel-in 0.22s cubic-bezier(0.34, 1.4, 0.64, 1) 1 both; }
 @media (prefers-reduced-motion: reduce) {
-	.petroom-star,
-	.petroom-lamp-glow,
-	.petroom-shooting,
-	.petroom-bubble-in,
-	.petroom-panel-in {
+	.petstand-pulse,
+	.petstand-bubble-in,
+	.petstand-panel-in {
 		animation: none !important;
 	}
 }
 `;
 
-/** 画布逻辑尺寸（房间坐标系的绝对基准，悬浮态只是整体 CSS 缩小） */
-const ROOM_W = 300;
-const ROOM_H = 340;
-const FLOOR_TOP = 268;
-/** 房内目标身高（约房高 65%；悬浮态 0.55 缩放 → 视觉约 120px） */
-const TARGET_H = 220;
-/** 悬浮形态整个画布的 CSS 缩放 */
-const FLOAT_SCALE = 0.55;
+/** 画布逻辑尺寸（人物坐标系）；悬浮态整体 CSS 缩小展示 */
+const STAGE_W = 320;
+const STAGE_H = 400;
+const FEET_Y = STAGE_H - 18; // 脚底（站在底座上沿）
+/** 悬浮形态整个画布的 CSS 缩放（0.72 → 最大的形象屏上约 240px 高） */
+const FLOAT_SCALE = 0.72;
 
-export default function Live2DHome({ busy }: { busy?: boolean }) {
+export default function Live2DHome({
+	busy,
+	modelKey,
+	aiConfigured,
+}: {
+	busy?: boolean;
+	/** home loader 服务端下发的形象 key（切换后刷新页面生效） */
+	modelKey: string;
+	/** home loader 服务端下发的 AI 是否已配置 */
+	aiConfigured: boolean;
+}) {
 	// 'loading' = 决定用 Live2D 还是回退；'live2d' | 'svg'
 	const [mode, setMode] = useState<"loading" | "live2d" | "svg">("loading");
-	// 房间是否展开；null = SSR 未读（不渲染，防闪烁）。默认 false：人物直接悬浮展示
-	const [roomOpen, setRoomOpen] = useState<boolean | null>(null);
 	const [phrase, setPhrase] = useState<string | null>(null);
 	const phraseTimer = useRef<number | undefined>(undefined);
 
@@ -112,33 +96,20 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		expression: (name: string) => unknown;
 		height: number;
 		width: number;
-		x: number;
-		y: number;
 	} | null>(null);
-
-	const [chatOpen, setChatOpen] = useState(false);
-	const [chatInput, setChatInput] = useState("");
-	const inputRef = useRef<HTMLInputElement | null>(null);
-	const listRef = useRef<HTMLDivElement | null>(null);
-	const { aiConfigured, messages, waiting, chatError, sendChat, modelKey, probed, clearChat } =
-		usePetChat();
 	// 模型清单解析出的可玩动作组 / 表情名（各模型差异大，加载时提取）
 	const playGroupsRef = useRef<string[]>([]);
 	const exprNamesRef = useRef<string[]>([]);
 	/** 当前已触发加载的形象 key（防同 key 重复加载；cleanup 置空允许重载） */
 	const loadedKeyRef = useRef<string | null>(null);
 
-	// 房间开关：记住用户选择
-	useEffect(() => {
-		setRoomOpen(localStorage.getItem(ROOM_KEY) === "1");
-	}, []);
-	const toggleRoom = () => {
-		setRoomOpen((prev) => {
-			const next = !(prev ?? false);
-			localStorage.setItem(ROOM_KEY, next ? "1" : "0");
-			return next;
-		});
-	};
+	const [chatOpen, setChatOpen] = useState(false);
+	const [chatInput, setChatInput] = useState("");
+	const inputRef = useRef<HTMLInputElement | null>(null);
+	const listRef = useRef<HTMLDivElement | null>(null);
+	const { messages, waiting, chatError, sendChat, clearChat } = usePetChat({
+		skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
+	});
 
 	const poke = useCallback(() => {
 		const pool = busy ? BUSY_PHRASES : PHRASES;
@@ -150,8 +121,7 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 	const playRandom = useCallback(() => {
 		const m = modelRef.current;
 		if (!m) return;
-		// 有动组（剔除 Idle——那是常驻待机）就随机挑一组；没动组的模型
-		// （如豆团子：动作全做在表情里）就纯换表情
+		// 有动组（剔除 Idle——那是常驻待机）就随机挑一组，否则纯换表情
 		const groups = playGroupsRef.current;
 		if (groups.length > 0) {
 			m.motion(groups[Math.floor(Math.random() * groups.length)]);
@@ -170,11 +140,10 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		};
 	}, []);
 
-	// 客户端状态就绪后加载模型（悬浮态也要显示人物，所以开不开房都加载）。
-	// 探测返回的形象 key 变化时会重跑（管理员切形象 → 现场换人）。
+	// 客户端首帧后加载模型（modelKey 来自 SSR props，无探测往返）。
+	// 形象 key 变化时会重跑（管理员切形象 → 刷新后换人）。
 	// 注意 mode 不进 deps：setMode('live2d') 若触发重跑，cleanup 会把刚建好的画布销毁
 	useEffect(() => {
-		if (roomOpen === null || !probed) return;
 		if (loadedKeyRef.current === modelKey) return; // 这只已加载/加载中
 		let disposed = false;
 		loadedKeyRef.current = modelKey;
@@ -182,39 +151,49 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 			try {
 				const cat =
 					MODEL_CATALOG.find((c) => c.key === modelKey) ?? MODEL_CATALOG[0];
-				// 1) 官方 runtime：Cubism4 = live2dcubismcore（全局 Live2DCubismCore），
-				//    Cubism2 = live2d.min.js（全局 Live2D）。都自托管，先按需注入
+				// 1) 官方 runtime 与 2) 渲染库并行拉（原先串行多一个往返）：
+				//    Cubism4 = live2dcubismcore（全局 Live2DCubismCore）；
+				//    Cubism2 = live2d.min.js（全局 Live2D）。都自托管
 				const w = window as unknown as {
 					Live2D?: unknown;
 					Live2DCubismCore?: unknown;
 				};
-				const needSrc =
+				const runtimePromise =
 					cat.gen === 4
 						? w.Live2DCubismCore
-							? null
-							: "/live2d/core/live2dcubismcore.min.js"
+							? Promise.resolve()
+							: new Promise<void>((resolve, reject) => {
+									const s = document.createElement("script");
+									s.src = "/live2d/core/live2dcubismcore.min.js";
+									s.onload = () => resolve();
+									s.onerror = () =>
+										reject(new Error("live2dcubismcore.min.js 加载失败"));
+									document.head.appendChild(s);
+								})
 						: w.Live2D
-							? null
-							: "/live2d/core/live2d.min.js";
-				if (needSrc) {
-					await new Promise<void>((resolve, reject) => {
-						const s = document.createElement("script");
-						s.src = needSrc;
-						s.onload = () => resolve();
-						s.onerror = () =>
-							reject(new Error(needSrc.split("/").pop() + " 加载失败"));
-						document.head.appendChild(s);
-					});
-				}
-				// 2) pixi + 显示层（动态 import；子入口按模型代别选——
-				//    0.4.0 主入口是全量包会同时检查两代 runtime）
-				const pixi = await import("pixi.js");
-				const { Live2DModel } =
-					cat.gen === 4
-						? await import("pixi-live2d-display/cubism4")
-						: await import("pixi-live2d-display/cubism2");
-				// 库依赖 window.PIXI 暴露（Ticker / 注册表）
-				(window as unknown as { PIXI: unknown }).PIXI = pixi;
+							? Promise.resolve()
+							: new Promise<void>((resolve, reject) => {
+									const s = document.createElement("script");
+									s.src = "/live2d/core/live2d.min.js";
+									s.onload = () => resolve();
+									s.onerror = () => reject(new Error("live2d.min.js 加载失败"));
+									document.head.appendChild(s);
+								});
+				// 0.4.0 主入口是全量包会同时检查两代 runtime，必须按代别走子入口
+				const libPromise = (async () => {
+					const pixi = await import("pixi.js");
+					const { Live2DModel } =
+						cat.gen === 4
+							? await import("pixi-live2d-display/cubism4")
+							: await import("pixi-live2d-display/cubism2");
+					// 库依赖 window.PIXI 暴露（Ticker / 注册表）
+					(window as unknown as { PIXI: unknown }).PIXI = pixi;
+					return { pixi, Live2DModel };
+				})();
+				const [, { pixi, Live2DModel }] = await Promise.all([
+					runtimePromise,
+					libPromise,
+				]);
 				if (disposed || !stageRef.current) return;
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const PIXI = pixi as any;
@@ -223,8 +202,8 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 				stageRef.current.replaceChildren();
 
 				const app = new PIXI.Application({
-					width: ROOM_W,
-					height: ROOM_H,
+					width: STAGE_W,
+					height: STAGE_H,
 					backgroundAlpha: 0,
 					antialias: true,
 				});
@@ -245,11 +224,12 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 					app.destroy(true);
 					return;
 				}
-				// 按模型固有尺寸动态缩放（各模型分辨率差异大，写死系数必翻车）
-				model.anchor.set(0.5, 1); // 底部中心 = 脚站地板
-				model.scale.set(TARGET_H / model.height);
-				model.position.set(ROOM_W * 0.54, FLOOR_TOP + 6);
+				// 按模型固有尺寸动态缩放 + per-model 目标身高（包围盒内空白差异大）
+				model.anchor.set(0.5, 1); // 底部中心 = 站在底座上
+				model.scale.set(cat.h / model.height);
+				model.position.set(STAGE_W * 0.5, FEET_Y);
 				app.stage.addChild(model);
+
 				// 从模型清单提取可玩动组 / 表情名（cubism4 与 cubism2 的清单结构不同）
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const settings = (model.settings ?? {}) as any;
@@ -287,7 +267,7 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 			appRef.current = null;
 			modelRef.current = null;
 		};
-	}, [roomOpen, probed, modelKey]);
+	}, [modelKey]);
 
 	// 灵动时钟：每 18~40s 自己挑个动作玩（换表情，三成概率冒台词）
 	useEffect(() => {
@@ -321,29 +301,44 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 		if (list) list.scrollTop = list.scrollHeight;
 	}, [messages, waiting]);
 
-	if (roomOpen === null) return null; // SSR/首帧不渲染，避免闪烁
-
 	// 回退：原守盘小猫（WebGL 不可用 / 模型加载失败）
 	if (mode === "svg") {
 		return <SitePet busy={busy} />;
 	}
 
-	const open = roomOpen === true;
+	const cat = MODEL_CATALOG.find((c) => c.key === modelKey) ?? MODEL_CATALOG[0];
 
 	return (
 		<div
-			className={`fixed z-40 select-none transition-all duration-300 ${
-				open
-					? "bottom-4 right-4 overflow-hidden rounded-[28px] border-2 shadow-2xl"
-					: "bottom-[84px] right-3 overflow-visible"
-			}`}
-			style={open ? { width: ROOM_W, height: ROOM_H } : { width: ROOM_W * FLOAT_SCALE, height: ROOM_H * FLOAT_SCALE }}
+			className="fixed right-3 bottom-2 z-40 select-none"
+			style={{
+				width: STAGE_W * FLOAT_SCALE,
+				height: STAGE_H * FLOAT_SCALE,
+			}}
 		>
 			<style>{STYLE}</style>
 
-			{/* 聊天面板（AI 已配置，从她左侧弹出；两种形态都以挂载点为锚） */}
+			{/* 底座：发光椭圆台座（人物踩在上沿） */}
+			<div
+				className="pointer-events-none absolute left-1/2 z-0 -translate-x-1/2"
+				style={{
+					bottom: 2,
+					width: (cat.h * 0.72) * FLOAT_SCALE,
+					height: 40 * FLOAT_SCALE,
+				}}
+				aria-hidden="true"
+			>
+				{/* 光晕 */}
+				<div className="petstand-pulse absolute inset-x-0 top-0 mx-auto h-full rounded-[50%] bg-gradient-to-b from-amber-200/70 via-pink-200/50 to-transparent blur-md dark:from-amber-500/30 dark:via-pink-500/20" />
+				{/* 台面 */}
+				<div className="absolute inset-x-[6%] top-0 h-[55%] rounded-[50%] border-2 border-amber-300/80 bg-gradient-to-b from-amber-50/95 to-amber-200/80 shadow-inner dark:border-amber-600/70 dark:from-zinc-700/90 dark:to-zinc-800/90" />
+				{/* 台身（薄薄的圆柱侧壁） */}
+				<div className="absolute inset-x-[10%] top-[30%] h-[60%] rounded-[50%] border-x border-b border-amber-300/50 bg-gradient-to-b from-amber-100/60 to-amber-300/10 dark:border-amber-700/40 dark:from-zinc-800/60 dark:to-transparent" />
+			</div>
+
+			{/* 聊天面板（AI 已配置，从她左侧弹出） */}
 			{chatOpen && aiConfigured && (
-				<div className="petroom-panel-in absolute bottom-2 right-[calc(100%+0.75rem)] flex h-72 w-[16rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
+				<div className="petstand-panel-in absolute bottom-4 right-[calc(100%+0.75rem)] flex h-72 w-[16rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
 					<div className="flex items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 dark:border-zinc-800 dark:from-amber-950/30 dark:to-orange-950/20">
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs" aria-hidden>
@@ -439,133 +434,33 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 				</div>
 			)}
 
-			{/* 台词气泡（她头顶） */}
+			{/* 台词气泡（头顶上方） */}
 			{phrase && (
 				<div
-					className="petroom-bubble-in absolute left-1/2 z-20 w-max max-w-[12rem] -translate-x-1/2"
-					style={
-						open
-							? { bottom: ROOM_H - (FLOOR_TOP - TARGET_H) - 26 }
-							: { top: -42 }
-					}
+					className="petstand-bubble-in absolute left-1/2 z-20 w-max max-w-[12rem] -translate-x-1/2"
+					style={{ top: -8 }}
 					role="status"
 				>
 					<div className="relative rounded-2xl border border-zinc-200 bg-white px-3.5 py-2 text-center text-[13px] text-zinc-700 shadow-lg dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
 						{phrase}
+						<span className="absolute bottom-0 left-1/2 h-2.5 w-2.5 translate-y-1/2 rotate-45 border-b border-r border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800" />
 					</div>
 				</div>
 			)}
 
-			{/* ======== 房间装饰（仅展开态；画布缩放态她是悬浮的，无背景） ======== */}
-			{open && (
-				<>
-					{/* 墙壁 */}
-					<div className="absolute inset-0 bg-gradient-to-b from-orange-50 via-amber-50 to-amber-100 dark:from-indigo-950 dark:via-slate-950 dark:to-indigo-950" />
-
-					{/* 窗户（夜=月亮星星 / 昼=太阳） */}
-					<svg
-						className="absolute left-5 top-9"
-						width="76"
-						height="88"
-						viewBox="0 0 76 88"
-						aria-hidden="true"
-					>
-						<rect x="1.5" y="1.5" width="73" height="85" rx="10" fill="#bfdbfe" className="dark:hidden" />
-						<rect x="1.5" y="1.5" width="73" height="85" rx="10" fill="#1e293b" className="hidden dark:inline" />
-						<g className="dark:hidden">
-							<circle cx="52" cy="20" r="10" fill="#fbbf24" />
-							<ellipse cx="26" cy="38" rx="12" ry="6" fill="#fff" opacity="0.9" />
-							<ellipse cx="34" cy="35" rx="9" ry="5" fill="#fff" opacity="0.9" />
-						</g>
-						<g className="hidden dark:inline">
-							<circle cx="50" cy="22" r="11" fill="#fde68a" />
-							<circle cx="46" cy="19" r="9" fill="#1e293b" />
-							<circle className="petroom-star" cx="18" cy="20" r="1.8" fill="#fef9c3" />
-							<circle className="petroom-star" style={{ animationDelay: "0.9s" }} cx="30" cy="34" r="1.4" fill="#fef9c3" />
-							<circle className="petroom-star" style={{ animationDelay: "1.7s" }} cx="16" cy="46" r="1.6" fill="#fef9c3" />
-						</g>
-						{busy && (
-							<g className="hidden dark:inline">
-								<line className="petroom-shooting" x1="64" y1="8" x2="72" y2="8" stroke="#fef08a" strokeWidth="2" strokeLinecap="round" />
-							</g>
-						)}
-						<rect x="1.5" y="1.5" width="73" height="85" rx="10" fill="none" stroke="#d97706" strokeWidth="3" />
-						<line x1="38" y1="2" x2="38" y2="86" stroke="#d97706" strokeWidth="2.5" />
-						<line x1="2" y1="44" x2="74" y2="44" stroke="#d97706" strokeWidth="2.5" />
-					</svg>
-
-					{/* 墙上相框（里面是原来的小猫剪影——她还在哦） */}
-					<svg
-						className="absolute right-[7.5rem] top-10"
-						width="42"
-						height="34"
-						viewBox="0 0 42 34"
-						aria-hidden="true"
-					>
-						<rect x="1" y="1" width="40" height="32" rx="3" fill="#fffbeb" stroke="#b45309" strokeWidth="2" />
-						<circle cx="21" cy="19" r="8" fill="#f9a8d4" />
-						<path d="M14 13 L12 4 L21 9 Z M28 13 L30 4 L21 9 Z" fill="#f9a8d4" />
-						<path d="M17 19 q2 2.5 4 0 q2 2.5 4 0" fill="none" stroke="#9d174d" strokeWidth="1.4" strokeLinecap="round" />
-					</svg>
-
-					{/* 台灯（夜里亮） */}
-					<div className="absolute right-4 bottom-[4.5rem] flex flex-col items-center" aria-hidden="true">
-						<div className="absolute -top-2 left-1/2 h-14 w-14 -translate-x-1/2 rounded-full bg-amber-200/60 blur-xl petroom-lamp-glow dark:bg-amber-300/25" />
-						<div className="relative h-6 w-10 rounded-t-[999px] bg-gradient-to-b from-amber-400 to-amber-500 dark:from-amber-300 dark:to-amber-600" />
-						<div className="h-9 w-1.5 bg-amber-700/80" />
-						<div className="h-1.5 w-8 rounded-full bg-amber-800/80" />
-					</div>
-
-					{/* 盆栽 */}
-					<svg className="absolute left-3 bottom-[4.2rem]" width="34" height="44" viewBox="0 0 34 44" aria-hidden="true">
-						<path d="M12 22 Q9 14 14 8 M17 22 Q17 12 17 6 M22 22 Q25 14 20 8" fill="none" stroke="#15803d" strokeWidth="2.5" strokeLinecap="round" />
-						<path d="M8 24 h18 l-2 12 h-14 Z" fill="#c2410c" stroke="#9a3412" strokeWidth="1.5" strokeLinejoin="round" />
-					</svg>
-
-					{/* 地毯 */}
-					<div
-						className="absolute left-1/2 rounded-[50%] border-2 border-rose-200/70 bg-rose-100/80 dark:border-rose-900/60 dark:bg-rose-950/40"
-						style={{ top: FLOOR_TOP - 24, width: 190, height: 56, transform: "translateX(-50%)" }}
-						aria-hidden="true"
-					/>
-
-					{/* 木地板（白天/夜晚两套） */}
-					<div
-						className="absolute inset-x-0 bottom-0 border-t-4 border-amber-700/60 dark:hidden"
-						style={{
-							height: ROOM_H - FLOOR_TOP,
-							background: "repeating-linear-gradient(90deg, #e7c9a9 0 34px, #dcb894 34px 68px)",
-						}}
-						aria-hidden="true"
-					/>
-					<div
-						className="absolute inset-x-0 bottom-0 hidden border-t-4 border-amber-900/70 dark:block"
-						style={{
-							height: ROOM_H - FLOOR_TOP,
-							background: "repeating-linear-gradient(90deg, #6b5340 0 34px, #5c4838 34px 68px)",
-						}}
-						aria-hidden="true"
-					/>
-				</>
-			)}
-
-			{/* ======== 画布（房间坐标系的绝对基准；悬浮态整体 CSS 缩小） ======== */}
+			{/* 画布（人物；缩放锚定左上，底部对齐底座） */}
 			<div
 				className="absolute left-0 top-0 origin-top-left"
 				style={{
-					width: ROOM_W,
-					height: ROOM_H,
-					// 悬浮态：缩到 0.55 且下移，让「脚底(内部 y=FLOOR_TOP+6)」贴住悬浮框底边
-					// （房间地板以下那截空白不进入可视范围，人不悬空）
-					transform: open
-						? "none"
-						: `scale(${FLOAT_SCALE}) translateY(${ROOM_H - (FLOOR_TOP + 6)}px)`,
+					width: STAGE_W,
+					height: STAGE_H,
+					transform: `scale(${FLOAT_SCALE}) translateY(${STAGE_H - (FEET_Y + 14)}px)`,
 				}}
 			>
 				<div
 					ref={stageRef}
 					className="relative cursor-pointer"
-					style={{ width: ROOM_W, height: ROOM_H }}
+					style={{ width: STAGE_W, height: STAGE_H }}
 					onPointerMove={onStagePointerMove}
 					onClick={() => {
 						// autoInteract 关闭后手动接点击：互动动作 + 随机表情 + 台词
@@ -578,68 +473,26 @@ export default function Live2DHome({ busy }: { busy?: boolean }) {
 
 			{/* 加载中 */}
 			{mode === "loading" && (
-				<div className="absolute inset-0 z-20 flex items-end justify-center pb-6">
+				<div className="absolute inset-x-0 bottom-6 z-20 flex justify-center">
 					<span className="animate-pulse rounded-full bg-white/80 px-3 py-1 text-xs text-amber-600 shadow dark:bg-zinc-800/80 dark:text-amber-300">
 						看板娘睡醒了穿衣服中…
 					</span>
 				</div>
 			)}
 
-			{/* 顶栏：展开态=名字/聊天/收起；悬浮态=小尺寸按钮组 */}
-			{open ? (
-				<div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-3 py-1.5">
-					<span className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-semibold text-amber-700 backdrop-blur-sm dark:bg-zinc-800/60 dark:text-amber-300">
-						🛏️ 守盘小窝
-					</span>
-					<div className="flex items-center gap-1">
-						{aiConfigured && (
-							<button
-								type="button"
-								title="和她聊天"
-								onClick={() => {
-									setChatOpen((o) => !o);
-									window.setTimeout(() => inputRef.current?.focus(), 120);
-								}}
-								className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-medium text-pink-600 backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/60 dark:text-pink-300 dark:hover:bg-pink-950/50"
-							>
-								💬 聊天
-							</button>
-						)}
-						<button
-							type="button"
-							title="收起小窝（她还留在页面上）"
-							onClick={toggleRoom}
-							className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] text-zinc-500 backdrop-blur-sm transition-colors hover:bg-zinc-100 dark:bg-zinc-800/60 dark:text-zinc-400 dark:hover:bg-zinc-700"
-						>
-							▾
-						</button>
-					</div>
-				</div>
-			) : (
-				<div className="absolute -top-6 right-0 z-30 flex items-center gap-1">
-					{aiConfigured && (
-						<button
-							type="button"
-							title="和她聊天"
-							onClick={() => {
-								setChatOpen((o) => !o);
-								window.setTimeout(() => inputRef.current?.focus(), 120);
-							}}
-							className="rounded-full bg-white/70 px-1.5 py-0.5 text-[11px] shadow backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/70 dark:hover:bg-pink-950/50"
-						>
-							💬
-						</button>
-					)}
-					<button
-						type="button"
-						title="打开她的小窝"
-						aria-label="打开守盘小窝"
-						onClick={toggleRoom}
-						className="rounded-full bg-white/70 px-1.5 py-0.5 text-[11px] shadow backdrop-blur-sm transition-colors hover:bg-amber-100 dark:bg-zinc-800/70 dark:hover:bg-zinc-700"
-					>
-						🏠
-					</button>
-				</div>
+			{/* 聊天入口（AI 已配置时） */}
+			{aiConfigured && (
+				<button
+					type="button"
+					title="和她聊天"
+					onClick={() => {
+						setChatOpen((o) => !o);
+						window.setTimeout(() => inputRef.current?.focus(), 120);
+					}}
+					className="absolute right-1 top-1 z-30 rounded-full bg-white/70 px-2 py-0.5 text-xs shadow backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/70 dark:hover:bg-pink-950/50"
+				>
+					💬
+				</button>
 			)}
 		</div>
 	);

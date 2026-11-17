@@ -1573,10 +1573,8 @@ export function AdminPanel({
 								<div className="grid grid-cols-2 gap-1.5">
 									{[
 										["shizuku", "小滴 しずく"],
-										["zundamon", "豆团子 ずんだもん"],
 										["tororo", "山药猫 とろろ"],
 										["hijiki", "小黑狗 ひじき"],
-										["mao", "虹色麻欧 まお"],
 										["rice", "小饭团 ライス"],
 										["hiyori", "桃濑日和 ひより"],
 									].map(([key, label]) => (

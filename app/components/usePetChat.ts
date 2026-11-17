@@ -14,7 +14,7 @@ export interface PetChatMessage {
 const CHAT_STORAGE_KEY = "wlist-pet-chat";
 const CHAT_KEEP = 30;
 
-export function usePetChat() {
+export function usePetChat(opts?: { skipProbe?: boolean }) {
 	const [aiConfigured, setAiConfigured] = useState(false);
 	const [messages, setMessages] = useState<PetChatMessage[]>([]);
 	const [waiting, setWaiting] = useState(false);
@@ -23,18 +23,23 @@ export function usePetChat() {
 	const [modelKey, setModelKey] = useState("shizuku");
 	const [probed, setProbed] = useState(false);
 
-	// 探测 + 恢复记录（都在 effect 里，SSR 安全）
+	// 探测 + 恢复记录（都在 effect 里，SSR 安全）。
+	// skipProbe：调用方（Live2DHome）已从 SSR props 拿到 configured/形象，跳过这次请求
 	useEffect(() => {
-		fetch("/api/pet")
-			.then((r) => (r.ok ? r.json() : null))
-			.then((d: { configured?: boolean; petModel?: string } | null) => {
-				if (d?.configured) setAiConfigured(true);
-				if (d?.petModel) setModelKey(d.petModel);
-			})
-			.catch(() => {
-				/* 探测失败按未配置走，不影响戳一戳 */
-			})
-			.finally(() => setProbed(true));
+		if (!opts?.skipProbe) {
+			fetch("/api/pet")
+				.then((r) => (r.ok ? r.json() : null))
+				.then((d: { configured?: boolean; petModel?: string } | null) => {
+					if (d?.configured) setAiConfigured(true);
+					if (d?.petModel) setModelKey(d.petModel);
+				})
+				.catch(() => {
+					/* 探测失败按未配置走，不影响戳一戳 */
+				})
+				.finally(() => setProbed(true));
+		} else {
+			setProbed(true);
+		}
 		try {
 			const saved = localStorage.getItem(CHAT_STORAGE_KEY);
 			if (saved) {
@@ -44,6 +49,7 @@ export function usePetChat() {
 		} catch {
 			/* 损坏忽略 */
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	// 记录变化就持久化

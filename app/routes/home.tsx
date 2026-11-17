@@ -208,6 +208,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 			siteAnnouncement,
 			chunkSizeMB,
 			webdavEnabled: false,
+			petModel: "shizuku",
+			petAiConfigured: false,
 		};
 	}
 
@@ -255,6 +257,14 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
 	const storages = await getAllStorages(db);
 
+	// 看板娘形象与 AI 开关服务端直读，随 SSR 下发——前端不再发探测请求，
+	// 形象加载的串行链少一个往返（这是「出场慢」的主因之一）
+	const { getPetModel, readPetAiConfig } = await import("~/lib/pet");
+	const [petModel, petAi] = await Promise.all([
+		getPetModel(db),
+		readPetAiConfig(db),
+	]);
+
 	return {
 		isAdmin,
 		user: user
@@ -273,6 +283,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		siteAnnouncement,
 		chunkSizeMB,
 		webdavEnabled,
+		petModel,
+		petAiConfigured: !!petAi,
 		folders: enrichFolderTree(buildFolderTree(folders), accessMap),
 		// 桶连接信息（endpoint/AK/桶名等）只给管理员；
 		// 其余身份只拿到 UI 所需的 {id, name, type}（loaderData 会随 SSR HTML 下发）
@@ -2558,6 +2570,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 		siteAnnouncement,
 		chunkSizeMB,
 		webdavEnabled,
+		petModel,
+		petAiConfigured,
 	} = loaderData;
 	const revalidator = useRevalidator();
 	const { isDark, toggle: toggleDark } = useDarkMode();
@@ -3053,7 +3067,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			)}
 
 			{/* 守盘小猫：上传时说加油 */}
-			<Live2DHome busy={uploadBusy} />
+			<Live2DHome
+				busy={uploadBusy}
+				modelKey={petModel}
+				aiConfigured={petAiConfigured}
+			/>
 
 			{showLogin && (
 				<LoginDialog

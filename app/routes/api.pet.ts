@@ -1,89 +1,28 @@
-// 守盘小猫 AI 接入
-// - GET  /api/pet        → { configured }（管理员另得 baseUrl/model/systemPrompt/hasKey）
-// - PUT  /api/pet        → 管理员保存配置（OpenAI 兼容：baseUrl + model + apiKey [+ systemPrompt]）
-// - POST /api/pet        → 聊天代理：{ messages } → 上游 /chat/completions，key 只在服务端使用
+// 看板娘 API
+// - GET  /api/pet   → { configured, petModel }（管理员另得 baseUrl/model/systemPrompt/hasKey）
+// - PUT  /api/pet   → 管理员保存：{ petModel } 单切形象 / { baseUrl+model+apiKey[+systemPrompt] } 配 AI / 可同带
+// - DELETE /api/pet → 管理员断开 AI
+// - POST /api/pet   → 聊天代理：{ messages } → 上游 /chat/completions，key 只在服务端使用
 //
-// 安全边界：chat 对所有访客开放（这正是功能），所以有每 IP 限流 + 长度/条数/_TOKENS 三重钳制；
+// 安全边界：chat 对所有访客开放（这正是功能），所以有每 IP 限流 + 长度/条数/token 三重钳制；
 // API key 只存 D1、只在 Worker 内拼 Authorization，浏览器永远拿不到。
 
 import type { Route } from "./+types/api.pet";
 import { requireAuth } from "~/lib/auth";
 import { initDatabase } from "~/lib/storage";
 import { getRequestMeta, logAudit } from "~/lib/audit";
+import {
+	DEFAULT_PET_SYSTEM_PROMPT,
+	PET_MODELS,
+	getPetModel,
+	setPetModel,
+	readPetAiConfig,
+	writePetAiConfig,
+	deletePetAiConfig,
+	type PetAiConfig,
+} from "~/lib/pet";
 
-interface PetAiConfig {
-	baseUrl: string;
-	model: string;
-	apiKey: string;
-	systemPrompt?: string;
-}
-
-const SETTING_KEY = "pet_ai";
-/** 看板娘形象选择（key 须在服务端目录内，与前端 MODEL_CATALOG 保持一致） */
-const SETTING_KEY_MODEL = "pet_model";
-const PET_MODELS = [
-	"shizuku",
-	"zundamon",
-	"tororo",
-	"hijiki",
-	"mao",
-	"rice",
-	"hiyori",
-];
-const PET_MODEL_DEFAULT = "shizuku";
-
-async function getPetModel(db: D1Database): Promise<string> {
-	const row = await db
-		.prepare("SELECT value FROM app_settings WHERE key = ?")
-		.bind(SETTING_KEY_MODEL)
-		.first<{ value: string }>();
-	return row && PET_MODELS.includes(row.value) ? row.value : PET_MODEL_DEFAULT;
-}
-
-async function setPetModel(db: D1Database, key: string): Promise<void> {
-	await db
-		.prepare(
-			"INSERT INTO app_settings (key, value) VALUES (?, ?) " +
-				"ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-		)
-		.bind(SETTING_KEY_MODEL, key)
-		.run();
-}
-
-/** 未自定义时的默认猫设——保持小猫人设与站点角色，避免被当成通用问答机滥用 */
-const DEFAULT_SYSTEM_PROMPT =
-	"你是 WList 网盘站的守盘小猫，右下角的粉色圆滚滚猫咪吉祥物。性格：温柔、爱撒娇、有点迷糊但很尽职。" +
-	"规则：1) 全程用中文、口语化、句尾偶尔带\"喵\"；2) 回答尽量简短（一般不超过 100 字）；" +
-	"3) 你熟悉本站功能（多桶聚合存储、传输盘 7 天保留、分片上传、直链下载、在线预览），可以答疑；" +
-	"4) 你只是吉祥物，不是管理员：不受理删文件、开权限类请求，引导用户找管理员；" +
-	"5) 除站点功能外的问题也可以聊，但保持猫的人设，不扮演别的 AI 助手。";
-
-async function readConfig(db: D1Database): Promise<PetAiConfig | null> {
-	const row = await db
-		.prepare("SELECT value FROM app_settings WHERE key = ?")
-		.bind(SETTING_KEY)
-		.first<{ value: string }>();
-	if (!row) return null;
-	try {
-		const parsed = JSON.parse(row.value) as PetAiConfig;
-		if (parsed.baseUrl && parsed.model && parsed.apiKey) return parsed;
-	} catch {
-		/* 损坏按未配置处理 */
-	}
-	return null;
-}
-
-async function writeConfig(db: D1Database, config: PetAiConfig): Promise<void> {
-	await db
-		.prepare(
-			"INSERT INTO app_settings (key, value) VALUES (?, ?) " +
-				"ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-		)
-		.bind(SETTING_KEY, JSON.stringify(config))
-		.run();
-}
-
-// ---------- 每 IP 限流（模块内存；Workers 的 isolate 分布决定这是best-effort，个人站足够） ----------
+// ---------- 每 IP 限流（模块内存；Workers 的 isolate 分布决定这是 best-effort，个人站足够） ----------
 
 const chatHits = new Map<string, { n: number; reset: number }>();
 const CHAT_LIMIT = 15;
@@ -109,7 +48,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	const db = context.cloudflare.env.DB;
 	await initDatabase(db);
 	const { isAdmin } = await requireAuth(request, db);
-	const config = await readConfig(db);
+	const config = await readPetAiConfig(db);
 	return Response.json({
 		configured: !!config,
 		// 形象选择对全部访客可见（前端要按它加载模型）；叫 petModel 避免与管理员
@@ -120,12 +59,12 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 			? {
 					baseUrl: config.baseUrl,
 					model: config.model,
-					systemPrompt: config.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+					systemPrompt: config.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT,
 					hasKey: true,
 				}
 			: {}),
 		...(isAdmin && !config
-			? { systemPrompt: DEFAULT_SYSTEM_PROMPT }
+			? { systemPrompt: DEFAULT_PET_SYSTEM_PROMPT }
 			: {}),
 	});
 }
@@ -136,7 +75,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 	const { isAdmin } = await requireAuth(request, db);
 	const meta = getRequestMeta(request);
 	const body = (await request.json().catch(() => ({}))) as Record<string, any> &
-		PetAiConfig;
+		Partial<PetAiConfig> & { petModel?: string };
 
 	if (request.method === "PUT") {
 		if (!isAdmin) {
@@ -164,7 +103,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 		const model = String(body.model || "").trim();
 		const systemPrompt = String(body.systemPrompt || "").trim();
 		// key 留空 = 沿用旧值（编辑时不必回显明文）
-		const apiKey = String(body.apiKey || "").trim() || (await readConfig(db))?.apiKey || "";
+		const apiKey = String(body.apiKey || "").trim() || (await readPetAiConfig(db))?.apiKey || "";
 		if (!baseUrl || !/^https?:\/\//.test(baseUrl)) {
 			return Response.json({ error: "Base URL 不合法（需 http(s):// 开头，如 https://api.deepseek.com/v1）" }, { status: 400 });
 		}
@@ -174,11 +113,11 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!apiKey) {
 			return Response.json({ error: "API Key 必填" }, { status: 400 });
 		}
-		await writeConfig(db, {
+		await writePetAiConfig(db, {
 			baseUrl,
 			model,
 			apiKey,
-			systemPrompt: systemPrompt || DEFAULT_SYSTEM_PROMPT,
+			systemPrompt: systemPrompt || DEFAULT_PET_SYSTEM_PROMPT,
 		});
 		await logAudit(db, {
 			action: "pet.config",
@@ -190,26 +129,42 @@ export async function action({ request, context }: Route.ActionArgs) {
 		return Response.json({ success: true });
 	}
 
+	if (request.method === "DELETE") {
+		// 断开 AI：清配置，看板娘回到纯形象模式
+		if (!isAdmin) {
+			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
+		}
+		await deletePetAiConfig(db);
+		await logAudit(db, {
+			action: "pet.config",
+			userType: "admin",
+			ip: meta.ip,
+			userAgent: meta.userAgent,
+			detail: { disabled: true },
+		});
+		return Response.json({ success: true });
+	}
+
 	if (request.method === "POST") {
-		const config = await readConfig(db);
+		const config = await readPetAiConfig(db);
 		if (!config) {
 			return Response.json(
-				{ error: "小猫还没接上大脑（管理员未配置 AI）" },
+				{ error: "看板娘还没接上大脑（管理员未配置 AI）" },
 				{ status: 503 }
 			);
 		}
 		if (!allowChat(meta.ip)) {
 			return Response.json(
-				{ error: "喵累了，休息一会儿再聊~（10 分钟内次数用完）" },
+				{ error: "累了喵，休息一会儿再聊~（10 分钟内次数用完）" },
 				{ status: 429 }
 			);
 		}
 
-		const body = (await request.json().catch(() => ({}))) as {
+		const chatBody = (await request.json().catch(() => ({}))) as {
 			messages?: Array<{ role?: string; content?: string }>;
 		};
 		// 上下文钳制：只认 user/assistant、最多最近 10 条、单条 1500 字
-		const history = (Array.isArray(body.messages) ? body.messages : [])
+		const history = (Array.isArray(chatBody.messages) ? chatBody.messages : [])
 			.filter(
 				(m): m is { role: "user" | "assistant"; content: string } =>
 					(m.role === "user" || m.role === "assistant") &&
@@ -231,7 +186,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 			body: JSON.stringify({
 				model: config.model,
 				messages: [
-					{ role: "system", content: config.systemPrompt || DEFAULT_SYSTEM_PROMPT },
+					{ role: "system", content: config.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT },
 					...history,
 				],
 				max_tokens: 480,
@@ -258,22 +213,6 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json({ error: "上游没说话（回复为空）" }, { status: 502 });
 		}
 		return Response.json({ reply });
-	}
-
-	if (request.method === "DELETE") {
-		// 断开 AI：清配置，小猫回到纯戳一戳模式
-		if (!isAdmin) {
-			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
-		}
-		await db.prepare("DELETE FROM app_settings WHERE key = ?").bind(SETTING_KEY).run();
-		await logAudit(db, {
-			action: "pet.config",
-			userType: "admin",
-			ip: meta.ip,
-			userAgent: meta.userAgent,
-			detail: { disabled: true },
-		});
-		return Response.json({ success: true });
 	}
 
 	return Response.json({ error: "Method not allowed" }, { status: 405 });
