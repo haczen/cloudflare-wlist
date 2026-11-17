@@ -439,10 +439,15 @@ export async function initDatabase(db: D1Database): Promise<void> {
       UNIQUE(storage_id, object_key),
       FOREIGN KEY (storage_id) REFERENCES storages(id) ON DELETE CASCADE
     )`,
-		// 杂项设置（键值对）：如守盘小猫的 AI 接入配置。敏感值（API key）只存服务端
+		// 杂项设置（键值对）：如守盘助手的 AI 接入配置。敏感值（API key）只存服务端
 		`CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    )`,
+		// 守盘助手聊天用量：每个身份（登录用户/访客IP）累计次数，上限见 api.pet
+		`CREATE TABLE IF NOT EXISTS pet_chat_usage (
+      k TEXT PRIMARY KEY,
+      n INTEGER NOT NULL DEFAULT 0
     )`,
 		`CREATE INDEX IF NOT EXISTS idx_tg_objects_storage ON tg_objects(storage_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_storages_is_public ON storages(is_public)`,

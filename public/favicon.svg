@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <!-- 毛茸茸小狗坐在云上听音乐 -->
+  <defs>
+    <radialGradient id="cloudShade" cx="0.5" cy="0.7" r="0.8">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe9f6"/>
+    </radialGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6e0c0"/>
+      <stop offset="1" stop-color="#e8c79a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 云朵 -->
+  <g stroke="#b8cfe8" stroke-width="2.5" stroke-linejoin="round">
+    <path d="M22 74 a11 11 0 0 1 2-21 a14 14 0 0 1 26-7 a11 11 0 0 1 12 10 a9.5 9.5 0 0 1-2 18 z" fill="url(#cloudShade)"/>
+  </g>
+  <!-- 云朵蓬起的小团 -->
+  <circle cx="34" cy="53" r="7" fill="#ffffff" stroke="#b8cfe8" stroke-width="2"/>
+  <circle cx="50" cy="49" r="8.5" fill="#ffffff" stroke="#b8cfe8" stroke-width="2"/>
+
+  <!-- 小狗身体（毛茸茸的 blob） -->
+  <path d="M38 58 q-6-14 3-20 q6-4 12-1 q9 3 6 15 q-2 7-8 8 q-8 2-13-2 z" fill="url(#fur)" stroke="#8a6c54" stroke-width="2.2" stroke-linejoin="round"/>
+  <!-- 尾巴 -->
+  <path d="M39 57 q-8 0-9-7 q-0.5-4 3-5 q3-1 4 3 q0.7 3-1 5" fill="#e8c79a" stroke="#8a6c54" stroke-width="2" stroke-linecap="round"/>
+  <!-- 前爪搭在云上 -->
+  <ellipse cx="44" cy="59" rx="3.4" ry="2.6" fill="#f6e0c0" stroke="#8a6c54" stroke-width="1.8"/>
+  <ellipse cx="56" cy="58.5" rx="3.4" ry="2.6" fill="#f6e0c0" stroke="#8a6c54" stroke-width="1.8"/>
+
+  <!-- 头 -->
+  <circle cx="50" cy="37" r="13" fill="url(#fur)" stroke="#8a6c54" stroke-width="2.2"/>
+  <!-- 垂耳（左） -->
+  <path d="M39 32 q-7-3-9 4 q-1.6 6 3 8 q4 1.6 6-3 q1-4 0-9 z" fill="#d9a878" stroke="#8a6c54" stroke-width="2" stroke-linejoin="round"/>
+  <!-- 垂耳（右） -->
+  <path d="M61 32 q7-3 9 4 q1.6 6-3 8 q-4 1.6-6-3 q-1-4 0-9 z" fill="#d9a878" stroke="#8a6c54" stroke-width="2" stroke-linejoin="round"/>
+
+  <!-- 耳机：头带 + 耳罩 -->
+  <path d="M37.5 34 a12.5 12.5 0 0 1 25 0" fill="none" stroke="#5b87dc" stroke-width="3.4" stroke-linecap="round"/>
+  <rect x="33.5" y="32" width="6.5" height="9.5" rx="3" fill="#5b87dc" stroke="#3d61a8" stroke-width="1.6"/>
+  <rect x="60" y="32" width="6.5" height="9.5" rx="3" fill="#5b87dc" stroke="#3d61a8" stroke-width="1.6"/>
+
+  <!-- 享受音乐的眯眯眼 + 鼻子嘴 -->
+  <path d="M44.5 38 q2.2-2.4 4.4 0" fill="none" stroke="#6b4f3a" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M51.5 38 q2.2-2.4 4.4 0" fill="none" stroke="#6b4f3a" stroke-width="1.9" stroke-linecap="round"/>
+  <ellipse cx="50.4" cy="41.5" rx="1.7" ry="1.3" fill="#6b4f3a"/>
+  <path d="M48.7 43.4 q1.7 1.7 3.4 0" fill="none" stroke="#6b4f3a" stroke-width="1.7" stroke-linecap="round"/>
+  <!-- 腮红 -->
+  <ellipse cx="41.5" cy="41.5" rx="2.2" ry="1.4" fill="#f0b7a8" opacity="0.85"/>
+  <ellipse cx="59.5" cy="41.5" rx="2.2" ry="1.4" fill="#f0b7a8" opacity="0.85"/>
+
+  <!-- 漂浮的音符 -->
+  <g fill="#5b87dc">
+    <path d="M70 24 v-8 l7-2 v8 z M70 24 a2.6 2.6 0 1 0 0.1 0 z" fill-rule="evenodd"/>
+    <path d="M79 30 v-6.5 l5.5-1.6 v6.5 z M79 30 a2.1 2.1 0 1 0 0.1 0 z" fill-rule="evenodd" opacity="0.75"/>
+    <circle cx="66" cy="14" r="1.2" opacity="0.6"/>
+  </g>
+</svg>

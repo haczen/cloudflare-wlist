@@ -109,9 +109,10 @@ export default function Live2DHome({
 	const [chatInput, setChatInput] = useState("");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const { messages, waiting, chatError, sendChat, clearChat } = usePetChat({
-		skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
-	});
+	const { messages, waiting, chatError, sendChat, remaining, clearChat } =
+		usePetChat({
+			skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
+		});
 
 	// ---- 助手位置（可拖拽；记忆在 localStorage） ----
 	const PET_POS_KEY = "wlist-pet-pos";
@@ -197,6 +198,8 @@ export default function Live2DHome({
 	};
 	const startPanelDrag = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (e.button !== 0) return;
+		// 按钮上的按下不进入拖拽（否则 pointer-capture 会劫持走 ✕/🧹 的点击）
+		if ((e.target as HTMLElement).closest("button")) return;
 		const header = e.currentTarget;
 		const panelEl = header.closest("div") as HTMLElement;
 		const rect = panelEl.getBoundingClientRect();
@@ -229,7 +232,11 @@ export default function Live2DHome({
 		header.addEventListener("pointermove", onMove);
 		header.addEventListener("pointerup", onUp);
 	};
-	const startPanelResize = (e: React.PointerEvent<HTMLDivElement>) => {
+	// 缩放：三向把手——左边=调宽、下边=调高、左下角=整体大小
+	const startPanelResize = (
+		e: React.PointerEvent<HTMLDivElement>,
+		axis: "w" | "h" | "wh"
+	) => {
 		if (e.button !== 0) return;
 		e.stopPropagation();
 		const grip = e.currentTarget;
@@ -245,17 +252,26 @@ export default function Live2DHome({
 		const startY = e.clientY;
 		grip.setPointerCapture(e.pointerId);
 		const onMove = (ev: PointerEvent) => {
-			savePanel({
-				...fixed,
-				w: Math.min(
-					Math.max(240, fixed.w - (ev.clientX - startX)),
+			const dx = ev.clientX - startX;
+			const dy = ev.clientY - startY;
+			const next = { ...fixed };
+			if (axis === "w" || axis === "wh") {
+				next.w = Math.min(
+					Math.max(240, fixed.w - dx),
 					Math.min(520, window.innerWidth - 40)
-				),
-				h: Math.min(
-					Math.max(220, fixed.h - (ev.clientY - startY)),
+				);
+				next.x = Math.min(
+					Math.max(4, fixed.x + (next.w - fixed.w)),
+					window.innerWidth - next.w - 4
+				);
+			}
+			if (axis === "h" || axis === "wh") {
+				next.h = Math.min(
+					Math.max(220, fixed.h + dy),
 					Math.min(560, window.innerHeight - 40)
-				),
-			});
+				);
+			}
+			savePanel(next);
 		};
 		const onUp = () => {
 			grip.removeEventListener("pointermove", onMove);
@@ -580,11 +596,21 @@ export default function Live2DHome({
 							</button>
 						</div>
 					</div>
-					{/* 缩放把手（面板在助手左侧，拉左下角向外放大） */}
+					{/* 缩放把手：左边=宽 / 下边=高 / 左下角=整体（面板在助手左侧） */}
 					<div
-						className="absolute bottom-0 left-0 z-10 h-4 w-4 cursor-nwse-resize"
-						title="拖动调整窗口大小"
-						onPointerDown={startPanelResize}
+						className="absolute bottom-2 left-0 top-8 z-10 w-1.5 cursor-ew-resize"
+						title="拖动调宽度"
+						onPointerDown={(e) => startPanelResize(e, "w")}
+					/>
+					<div
+						className="absolute inset-x-2 bottom-0 z-10 h-1.5 cursor-ns-resize"
+						title="拖动调高度"
+						onPointerDown={(e) => startPanelResize(e, "h")}
+					/>
+					<div
+						className="absolute bottom-0 left-0 z-20 h-4 w-4 cursor-nwse-resize"
+						title="拖动整体调整大小"
+						onPointerDown={(e) => startPanelResize(e, "wh")}
 					>
 						<svg viewBox="0 0 16 16" className="h-full w-full text-zinc-300 dark:text-zinc-600" aria-hidden="true">
 							<circle cx="4" cy="12" r="1.4" fill="currentColor" />
@@ -644,29 +670,47 @@ export default function Live2DHome({
 						)}
 					</div>
 					<form
-						className="flex items-center gap-1.5 border-t border-zinc-100 p-2 dark:border-zinc-800"
+						className="flex flex-col gap-1 border-t border-zinc-100 p-2 dark:border-zinc-800"
 						onSubmit={(e) => {
 							e.preventDefault();
 							sendChat(chatInput);
 							setChatInput("");
 						}}
 					>
-						<input
-							ref={inputRef}
-							className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-amber-300 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-amber-600"
-							placeholder={aiConfigured ? "说点什么…" : "接入 AI 后才能聊天哦"}
-							maxLength={500}
-							value={chatInput}
-							onChange={(e) => setChatInput(e.target.value)}
-							disabled={!aiConfigured}
-						/>
-						<button
-							type="submit"
-							className="shrink-0 rounded-full bg-amber-400 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
-							disabled={waiting || !chatInput.trim() || !aiConfigured}
-						>
-							发送
-						</button>
+						<div className="flex items-center gap-1.5">
+							<input
+								ref={inputRef}
+								className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-amber-300 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-amber-600"
+								placeholder={
+									!aiConfigured
+										? "接入 AI 后才能聊天哦"
+										: remaining === 0
+											? "聊天次数用完啦~"
+											: "说点什么…"
+								}
+								maxLength={500}
+								value={chatInput}
+								onChange={(e) => setChatInput(e.target.value)}
+								disabled={!aiConfigured || remaining === 0}
+							/>
+							<button
+								type="submit"
+								className="shrink-0 rounded-full bg-amber-400 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+								disabled={
+									waiting || !chatInput.trim() || !aiConfigured || remaining === 0
+								}
+							>
+								发送
+							</button>
+						</div>
+						{/* 剩余次数：每次成功对话后递减，用完禁聊 */}
+						<p className="px-1 text-center text-[10.5px] text-zinc-400 dark:text-zinc-500">
+							{aiConfigured
+								? remaining === 0
+									? "聊天次数已用完（每个账号共 10 次）"
+									: `还可以聊 ${remaining ?? "…"} 次`
+								: "未接入 AI"}
+						</p>
 					</form>
 				</div>
 			)}

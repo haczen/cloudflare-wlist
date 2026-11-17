@@ -2,37 +2,53 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ===== 柔和马卡龙主题 =====
-   全站 UI 用的是 zinc 灰阶 + blue 主色，直接覆写这两套色板 token：
-   一处改、全局生效（页面/弹窗/表格/按钮自动统一，杜绝"有的渐变有的不渐变"的混搭感）。
-   zinc → 暖奶油可可调（浅色=奶油粉，深色=可可棕夜）；
-   blue → 柔和的婴儿蓝（马卡龙蓝），交互态保留可辨识度。 */
+/* ===== 三主题：白 / 黑 / 暖 =====
+   规则（用户定的）：黑白主题时全部文字用蓝色，暖主题时全部文字用咖啡色；
+   不搞花哨配色。实现：按 html[data-theme] 覆写 zinc 色板 token，
+   dark 主题额外挂 .dark 类驱动 dark: 变体。 */
 @theme {
-	/* zinc → 马卡龙暖调 */
-	--color-zinc-50: #fdf9f6;
-	--color-zinc-100: #f8efe9;
-	--color-zinc-200: #efdfd7;
-	--color-zinc-300: #e0c9bf;
-	--color-zinc-400: #c5a49a;
-	--color-zinc-500: #a3877e;
-	--color-zinc-600: #866959;
-	--color-zinc-700: #6d544a;
-	--color-zinc-800: #57413a;
-	--color-zinc-900: #45332d;
-	--color-zinc-950: #291d19;
+	/* 默认（=白主题）：白底 + 蓝字 */
+	--color-zinc-50: #fbfcfe;
+	--color-zinc-100: #f4f7fb;
+	--color-zinc-200: #e6ebf3;
+	--color-zinc-300: #c9d6ea;
+	--color-zinc-400: #7ba0da;
+	--color-zinc-500: #5d84cf;
+	--color-zinc-600: #4569b8;
+	--color-zinc-700: #35559c;
+	--color-zinc-800: #28427e;
+	--color-zinc-900: #1c3262;
+	--color-zinc-950: #101c3a;
+}
 
-	/* blue → 马卡龙婴儿蓝 */
-	--color-blue-50: #f0f5fd;
-	--color-blue-100: #dce8fa;
-	--color-blue-200: #c0d4f5;
-	--color-blue-300: #9ab8ee;
-	--color-blue-400: #739ae4;
-	--color-blue-500: #5b87dc;
-	--color-blue-600: #4a75c9;
-	--color-blue-700: #3d61a8;
-	--color-blue-800: #34528a;
-	--color-blue-900: #2e4670;
-	--color-blue-950: #1d2c45;
+/* 黑主题：黑底 + 亮蓝字（.dark 类由 JS 同步挂上） */
+html.dark {
+	--color-zinc-50: #171b22;
+	--color-zinc-100: #cfe0fa;
+	--color-zinc-200: #b7d0f5;
+	--color-zinc-300: #9ab8ee;
+	--color-zinc-400: #7d9fe0;
+	--color-zinc-500: #6488d4;
+	--color-zinc-600: #4a6cb8;
+	--color-zinc-700: #171b22;
+	--color-zinc-800: #13161d;
+	--color-zinc-900: #0e1117;
+	--color-zinc-950: #090b0f;
+}
+
+/* 暖主题：奶油底 + 咖啡字 */
+html[data-theme="warm"] {
+	--color-zinc-50: #faf5ee;
+	--color-zinc-100: #f4ebdd;
+	--color-zinc-200: #e9dac6;
+	--color-zinc-300: #d9c4a8;
+	--color-zinc-400: #a5886e;
+	--color-zinc-500: #8a6c54;
+	--color-zinc-600: #705644;
+	--color-zinc-700: #5b4436;
+	--color-zinc-800: #493528;
+	--color-zinc-900: #382819;
+	--color-zinc-950: #221709;
 }
 
 /* 主题切换过渡（兜底）：仅在切换瞬间由 JS 给 <html> 挂 .theme-anim（650ms 后摘除），

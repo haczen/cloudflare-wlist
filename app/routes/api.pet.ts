@@ -44,6 +44,34 @@ function allowChat(ip: string): boolean {
 	return true;
 }
 
+// ---------- 聊天总量配额：每个身份（登录用户 / 访客 IP）累计 10 次 ----------
+
+const CHAT_QUOTA = 10;
+
+/** 身份键：登录用户按用户 id，访客按 IP（key 加前缀防碰撞） */
+function chatIdentity(user: { id: number } | null, ip: string): string {
+	return user ? `u:${user.id}` : `ip:${ip}`;
+}
+
+async function getChatUsage(db: D1Database, key: string): Promise<number> {
+	const row = await db
+		.prepare("SELECT n FROM pet_chat_usage WHERE k = ?")
+		.bind(key)
+		.first<{ n: number }>();
+	return row?.n ?? 0;
+}
+
+async function bumpChatUsage(db: D1Database, key: string): Promise<number> {
+	await db
+		.prepare(
+			"INSERT INTO pet_chat_usage (k, n) VALUES (?, 1) " +
+				"ON CONFLICT(k) DO UPDATE SET n = n + 1"
+		)
+		.bind(key)
+		.run();
+	return getChatUsage(db, key);
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
 	const db = context.cloudflare.env.DB;
 	await initDatabase(db);
@@ -86,8 +114,14 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		return Response.json({ models, current: config.model });
 	}
 
+	// 聊天剩余次数（对当前身份；面板要在下方显示）
+	const { user: me } = await requireAuth(request, db);
+	const used = await getChatUsage(db, chatIdentity(me, getRequestMeta(request).ip));
+
 	return Response.json({
 		configured: !!config,
+		remaining: Math.max(0, CHAT_QUOTA - used),
+		quota: CHAT_QUOTA,
 		// 形象选择对全部访客可见（前端要按它加载模型）；叫 petModel 避免与管理员
 		// 视角的 LLM model 名撞车
 		petModel: await getPetModel(db),
@@ -109,7 +143,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 export async function action({ request, context }: Route.ActionArgs) {
 	const db = context.cloudflare.env.DB;
 	await initDatabase(db);
-	const { isAdmin } = await requireAuth(request, db);
+	const { user, isAdmin } = await requireAuth(request, db);
 	const meta = getRequestMeta(request);
 	const body = (await request.json().catch(() => ({}))) as Record<string, any> &
 		Partial<PetAiConfig> & { petModel?: string };
@@ -197,6 +231,16 @@ export async function action({ request, context }: Route.ActionArgs) {
 			);
 		}
 
+		// 总量配额：每个身份（登录用户/访客 IP）累计 CHAT_QUOTA 次
+		const ident = chatIdentity(user, meta.ip);
+		const used = await getChatUsage(db, ident);
+		if (used >= CHAT_QUOTA) {
+			return Response.json(
+				{ error: "聊天次数用完啦~（每个账号共 10 次）", remaining: 0 },
+				{ status: 429 }
+			);
+		}
+
 		// 注意：body 已在 action 顶部解析过一次——Request body 只能读一次，
 		// 这里再 request.json() 会抛错被 catch 成空对象 → 消息列表恒空 →
 		// 一直报「没有可回复的消息」（此前线上就是这个 bug）
@@ -271,7 +315,9 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!reply) {
 			return Response.json({ error: "上游没说话（回复为空）" }, { status: 502 });
 		}
-		return Response.json({ reply });
+		// 成功回复才计数；返回剩余次数供面板显示
+		const n = await bumpChatUsage(db, ident);
+		return Response.json({ reply, remaining: Math.max(0, CHAT_QUOTA - n) });
 	}
 
 	return Response.json({ error: "Method not allowed" }, { status: 405 });

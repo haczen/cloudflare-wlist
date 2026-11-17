@@ -22,24 +22,33 @@ export function usePetChat(opts?: { skipProbe?: boolean }) {
 	/** 看板娘形象 key（管理员在管理面板切换）；probed = 探测请求已返回 */
 	const [modelKey, setModelKey] = useState("shizuku");
 	const [probed, setProbed] = useState(false);
+	/** 剩余聊天次数（每身份 10 次；null=未知） */
+	const [remaining, setRemaining] = useState<number | null>(null);
 
 	// 探测 + 恢复记录（都在 effect 里，SSR 安全）。
 	// skipProbe：调用方（Live2DHome）已从 SSR props 拿到 configured/形象，跳过这次请求
 	useEffect(() => {
-		if (!opts?.skipProbe) {
-			fetch("/api/pet")
-				.then((r) => (r.ok ? r.json() : null))
-				.then((d: { configured?: boolean; petModel?: string } | null) => {
-					if (d?.configured) setAiConfigured(true);
-					if (d?.petModel) setModelKey(d.petModel);
-				})
-				.catch(() => {
-					/* 探测失败按未配置走，不影响戳一戳 */
-				})
-				.finally(() => setProbed(true));
-		} else {
-			setProbed(true);
-		}
+		// 形象/开关可来自 SSR（skipProbe 时不重复采信），但剩余次数必须问服务端
+		fetch("/api/pet")
+			.then((r) => (r.ok ? r.json() : null))
+			.then(
+				(d: {
+					configured?: boolean;
+					petModel?: string;
+					remaining?: number;
+				} | null) => {
+					if (!d) return;
+					if (!opts?.skipProbe) {
+						if (d.configured) setAiConfigured(true);
+						if (d.petModel) setModelKey(d.petModel);
+					}
+					if (typeof d.remaining === "number") setRemaining(d.remaining);
+				}
+			)
+			.catch(() => {
+				/* 探测失败按未配置走，不影响戳一戳 */
+			})
+			.finally(() => setProbed(true));
 		try {
 			const saved = localStorage.getItem(CHAT_STORAGE_KEY);
 			if (saved) {
@@ -87,7 +96,9 @@ export function usePetChat(opts?: { skipProbe?: boolean }) {
 				const data = (await r.json().catch(() => ({}))) as {
 					reply?: string;
 					error?: string;
+					remaining?: number;
 				};
+				if (typeof data.remaining === "number") setRemaining(data.remaining);
 				if (!r.ok || !data.reply) throw new Error(data.error || "回复失败");
 				setMessages((prev) => [
 					...prev,
@@ -108,6 +119,7 @@ export function usePetChat(opts?: { skipProbe?: boolean }) {
 		sendChat,
 		modelKey,
 		probed,
+		remaining,
 		clearChat: () => {
 			setMessages([]);
 			setChatError(null);

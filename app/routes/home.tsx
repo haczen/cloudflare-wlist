@@ -2355,66 +2355,60 @@ function FileBrowser({
 	);
 }
 
-// ---------- 主题：浅色 / 深色 / 自动跟随系统，切换带雾化过渡 ----------
+// ---------- 主题：白 / 黑 / 暖 三选一循环，切换带雾化过渡 ----------
 
-type ThemeMode = "light" | "dark" | "auto";
+type ThemeMode = "light" | "dark" | "warm";
 
 function useDarkMode() {
-	const [mode, setMode] = useState<ThemeMode>("auto");
+	const [mode, setMode] = useState<ThemeMode>("light");
 	const [isDark, setIsDark] = useState(false);
 
-	// 初始：读存储（默认 auto），auto 时跟系统
+	// 初始：读存储（旧值 auto 并入 light）
 	useEffect(() => {
 		const saved = localStorage.getItem("wlist-theme");
 		const m: ThemeMode =
-			saved === "dark" || saved === "light" ? saved : "auto";
+			saved === "dark" || saved === "warm" ? saved : "light";
 		setMode(m);
-		setIsDark(m === "dark" || (m === "auto" && systemDark()));
+		setIsDark(m === "dark");
 	}, []);
 
-	// auto 模式下监听系统切换
-	useEffect(() => {
-		if (mode !== "auto") return;
-		const mq = window.matchMedia("(prefers-color-scheme: dark)");
-		const onChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
-		mq.addEventListener("change", onChange);
-		return () => mq.removeEventListener("change", onChange);
-	}, [mode]);
-
-	// 点按钮循环：浅 → 深 → 自动 → 浅……
 	const cycle = useCallback(() => {
 		setMode((prev) => {
 			const next: ThemeMode =
-				prev === "light" ? "dark" : prev === "dark" ? "auto" : "light";
+				prev === "light" ? "dark" : prev === "dark" ? "warm" : "light";
 			localStorage.setItem("wlist-theme", next);
-			applyTheme(next, setIsDark);
+			applyTheme(next, () => setIsDark(next === "dark"));
 			return next;
 		});
 	}, []);
 
 	useEffect(() => {
-		document.documentElement.classList.toggle("dark", isDark);
-	}, [isDark]);
+		// 挂载时也同步一次（刷新后 attr 与状态一致）
+		syncThemeAttr(mode);
+	}, [mode]);
 	return { mode, isDark, toggle: cycle };
 }
 
-function systemDark(): boolean {
-	return window.matchMedia("(prefers-color-scheme: dark)").matches;
+function syncThemeAttr(mode: ThemeMode): void {
+	const root = document.documentElement;
+	root.dataset.theme = mode;
+	root.classList.toggle("dark", mode === "dark");
 }
 
 /** 换主题：优先雾化过渡（View Transitions，旧画面模糊淡出=雾散）；
  *  不支持的浏览器退回 CSS 色彩过渡（.theme-anim）。
  *  连点保护：新切换先 skip 掉未完成的旧过渡（否则旧 transition 的 promise
  *  以 AbortError 拒绝 → 控制台报未处理异常） */
-let activeViewTransition: { skipTransition?: () => void } | null = null;
+let activeViewTransition: {
+	skipTransition?: () => void;
+	ready?: Promise<void>;
+	finished?: Promise<void>;
+	updateCallbackDone?: Promise<void>;
+} | null = null;
 
-function applyTheme(
-	next: ThemeMode,
-	setIsDark: (v: boolean) => void
-): void {
-	const target = next === "dark" || (next === "auto" && systemDark());
+function applyTheme(next: ThemeMode, apply: () => void): void {
 	const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-	const flip = () => flushSync(() => setIsDark(target));
+	const flip = () => flushSync(apply);
 	const doc = document as Document & {
 		startViewTransition?: (cb: () => void) => {
 			skipTransition?: () => void;
@@ -2431,8 +2425,6 @@ function applyTheme(
 		}
 		const vt = doc.startViewTransition(flip);
 		activeViewTransition = vt;
-		// skip 会同时拒绝 ready/finished/updateCallbackDone 三个 promise，
-		// 全部吞掉，避免未处理拒绝刷屏
 		for (const p of [vt.ready, vt.finished, vt.updateCallbackDone]) {
 			p?.catch(() => {});
 		}
@@ -2779,11 +2771,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			{/* 侧边栏 */}
 			<aside className="flex shrink-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 md:w-64 md:border-b-0 md:border-r">
 				{/* 品牌区 */}
-				<div className="border-b border-zinc-100 bg-rose-50 px-4 py-3.5 dark:bg-zinc-900">
+				<div className="border-b border-zinc-100 bg-zinc-50 px-4 py-3.5 dark:bg-zinc-900">
 					<div className="flex items-center gap-2.5">
-						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-rose-400 text-white shadow-sm">
-							<CloudIcon className="h-4.5 w-4.5" />
-						</span>
+						{/* Logo：毛茸茸小狗坐在云上听音乐（与 favicon 同款） */}
+						<img
+							src="/favicon.svg"
+							alt=""
+							className="h-9 w-9 shrink-0 rounded-xl bg-white shadow-sm dark:bg-zinc-800"
+						/>
 						<div className="min-w-0 flex-1">
 							<h1 className="truncate text-base font-bold text-zinc-800 dark:text-zinc-100">
 								{siteTitle}
@@ -2908,10 +2903,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 						className="btn-ghost !px-2"
 						title={
 							themeMode === "light"
-								? "主题：浅色（点切换深色）"
+								? "主题：白（点切到黑）"
 								: themeMode === "dark"
-									? "主题：深色（点切换自动）"
-									: "主题：自动跟随系统（点切换浅色）"
+									? "主题：黑（点切到暖色）"
+									: "主题：暖（点切到白）"
 						}
 						onClick={toggleDark}
 					>
@@ -2920,9 +2915,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 						) : themeMode === "dark" ? (
 							<MoonIcon className="h-4 w-4" />
 						) : (
-							<span className="relative inline-flex h-4 w-4 items-center justify-center">
-								<SunIcon className="absolute left-0 h-2.5 w-2.5" />
-								<MoonIcon className="absolute right-0 h-2.5 w-2.5" />
+							<span className="text-sm leading-none" aria-hidden>
+								☕
 							</span>
 						)}
 					</button>
