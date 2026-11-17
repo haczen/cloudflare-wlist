@@ -57,34 +57,35 @@ const CUSHION_NIGHT: Palette = {
 	weave: [150, 116, 78, 0.4],
 };
 const NEST_DAY: Palette = {
-	shadow: [110, 66, 24, 0.24],
-	glowA: [251, 191, 36, 0.42],
-	glowB: [244, 131, 86, 0.18],
-	top: [255, 238, 227, 1],
-	mid: [253, 216, 196, 1],
-	bottom: [245, 183, 160, 1],
-	rim: [226, 148, 122, 1],
-	stitch: [255, 255, 255, 0.95],
-	hl: [255, 244, 235, 0.9],
-	cushionA: [255, 247, 242, 1],
-	cushionB: [250, 216, 202, 1],
-	paw: [230, 120, 150, 1],
-	weave: [216, 150, 128, 0.55],
+	shadow: [110, 76, 30, 0.22],
+	glowA: [246, 205, 122, 0.4],
+	glowB: [226, 170, 96, 0.16],
+	// 暖黄绒面（低饱和不刺眼）：奶黄 → 蜜蜂黄 → 麦穗黄
+	top: [248, 240, 214, 1],
+	mid: [238, 216, 166, 1],
+	bottom: [214, 178, 112, 1],
+	rim: [186, 143, 78, 1],
+	stitch: [255, 252, 238, 0.95],
+	hl: [255, 249, 226, 0.92],
+	cushionA: [253, 247, 228, 1],
+	cushionB: [236, 209, 152, 1],
+	paw: [226, 132, 118, 1],
+	weave: [200, 158, 96, 0.6],
 };
 const NEST_NIGHT: Palette = {
 	shadow: [0, 0, 0, 0.5],
-	glowA: [251, 191, 36, 0.24],
-	glowB: [150, 108, 60, 0.12],
-	top: [92, 76, 88, 1],
-	mid: [74, 60, 72, 1],
-	bottom: [56, 46, 56, 1],
-	rim: [142, 100, 96, 1],
-	stitch: [255, 226, 208, 0.5],
-	hl: [253, 230, 200, 0.6],
-	cushionA: [100, 82, 92, 1],
-	cushionB: [68, 55, 66, 1],
-	paw: [200, 140, 160, 0.9],
-	weave: [126, 96, 88, 0.5],
+	glowA: [246, 205, 122, 0.22],
+	glowB: [160, 120, 60, 0.12],
+	top: [92, 80, 56, 1],
+	mid: [76, 65, 44, 1],
+	bottom: [58, 49, 33, 1],
+	rim: [140, 110, 66, 1],
+	stitch: [255, 244, 214, 0.45],
+	hl: [253, 233, 176, 0.55],
+	cushionA: [98, 84, 58, 1],
+	cushionB: [68, 57, 38, 1],
+	paw: [200, 140, 128, 0.9],
+	weave: [128, 102, 66, 0.5],
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -283,7 +284,7 @@ function drawNestBack(
 	const cy = h * 0.5;
 	const rx = w * 0.42;
 	const ry = h * 0.4;
-	const rimT = ry * 0.62; // 绒面圆边的厚度
+	const rimT = ry * 0.72; // 绒面圆边的厚度
 	// 地面软影
 	ctx.beginPath();
 	ctx.ellipse(cx, cy + ry * 0.78, rx * 1.1, ry * 0.36, 0, 0, Math.PI * 2);
@@ -384,7 +385,7 @@ function drawNestFront(
 	const cy = h * 0.5;
 	const rx = w * 0.42;
 	const ry = h * 0.4;
-	const rimT = ry * 0.62;
+	const rimT = ry * 0.72;
 	// 前檐：整条下半个绒面环（更厚更高——把人物的脚和小腿裹进去）
 	ctx.save();
 	const grad = ctx.createLinearGradient(0, cy, 0, cy + ry);
@@ -396,9 +397,9 @@ function drawNestFront(
 	// 内弧回描：抬高到几乎水平中线，形成深兜
 	ctx.ellipse(
 		cx,
-		cy - rimT * 0.15,
+		cy - rimT * 0.38,
 		rx - rimT * 0.9,
-		ry - rimT * 0.72,
+		ry - rimT * 0.78,
 		0,
 		Math.PI,
 		true

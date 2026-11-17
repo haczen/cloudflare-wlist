@@ -211,6 +211,14 @@ export default function Live2DHome({
 				canvas.style.height = "100%";
 				canvas.style.display = "block";
 				stageRef.current.appendChild(canvas);
+				// 不需要 pixi 内置事件系统（点击/视线跟随全由 React 层手动接）：
+				// 留着它会在 pointer 事件里空转报 currentTarget.isInteractive 错
+				try {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					(app.renderer as any).events?.destroy?.();
+				} catch {
+					/* 版本差异忽略 */
+				}
 
 				// autoInteract 关掉：内置自动交互走 pixi 废弃的 interaction 插件会抛错
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -225,7 +233,7 @@ export default function Live2DHome({
 				}
 				// 按模型固有尺寸动态缩放 + per-model 目标身高（包围盒内空白差异大）。
 				// 宠物窝造型再下沉一点——脚和小腿埋进窝里，配合前檐遮挡形成"坐进去"的实感
-				const sink = cat.stand === "nest" ? 16 : 0;
+				const sink = cat.stand === "nest" ? 18 : 0;
 				model.anchor.set(0.5, 1); // 底部中心 = 落在底座上
 				model.scale.set(cat.h / model.height);
 				model.position.set(STAGE_W * 0.5, FEET_Y + sink);
@@ -270,31 +278,72 @@ export default function Live2DHome({
 		};
 	}, [modelKey]);
 
-	// 灵动时钟：每 18~40s 自己挑个动作玩（换表情，三成概率冒台词）
+	// 灵动时钟：动作与说话分开计时——
+	// 动作（换表情/小舞蹈）每 10~22s 一次；说话每 14~28s 冒一句（不点击也会说）
 	useEffect(() => {
 		if (mode !== "live2d") return;
-		let timer: number | undefined;
-		const tick = () => {
-			timer = window.setTimeout(() => {
+		let motionTimer: number | undefined;
+		let speakTimer: number | undefined;
+		let stopped = false;
+		const loopMotion = () => {
+			motionTimer = window.setTimeout(() => {
+				if (stopped) return;
 				playRandom();
-				if (Math.random() < 0.35) poke();
-				tick();
-			}, 18_000 + Math.random() * 22_000);
+				loopMotion();
+			}, 10_000 + Math.random() * 12_000);
 		};
-		tick();
-		return () => window.clearTimeout(timer);
+		const loopSpeak = () => {
+			speakTimer = window.setTimeout(() => {
+				if (stopped) return;
+				poke();
+				loopSpeak();
+			}, 14_000 + Math.random() * 14_000);
+		};
+		// 首句来得快一点（8s 内亮相，让人知道她会自己说话）
+		speakTimer = window.setTimeout(() => {
+			if (!stopped) {
+				poke();
+				loopSpeak();
+			}
+		}, 6_000 + Math.random() * 2_000);
+		loopMotion();
+		return () => {
+			stopped = true;
+			window.clearTimeout(motionTimer);
+			window.clearTimeout(speakTimer);
+		};
 	}, [mode, playRandom, poke]);
 
-	// 鼠标悬停 → 视线跟随
-	const onStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-		const model = modelRef.current;
-		if (!model) return;
-		const rect = e.currentTarget.getBoundingClientRect();
-		model.focus(
-			((e.clientX - rect.left) / rect.width) * 2 - 1,
-			-(((e.clientY - rect.top) / rect.height) * 2 - 1)
-		);
-	};
+	// 视线跟随：整页鼠标移动都算（不只画布内），rAF 节流
+	useEffect(() => {
+		if (mode !== "live2d") return;
+		let raf = 0;
+		let mx = -1;
+		let my = -1;
+		const onMove = (e: MouseEvent) => {
+			mx = e.clientX;
+			my = e.clientY;
+			if (raf) return;
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				const m = modelRef.current;
+				const stage = stageRef.current;
+				if (!m || !stage || mx < 0) return;
+				const r = stage.getBoundingClientRect();
+				// 以人物胸口为原点，把屏幕坐标映射到 [-1,1]（右上为正）
+				const cx = r.left + r.width / 2;
+				const cy = r.top + r.height * 0.5;
+				const nx = Math.max(-1, Math.min(1, (mx - cx) / (window.innerWidth * 0.42)));
+				const ny = Math.max(-1, Math.min(1, -(my - cy) / (window.innerHeight * 0.42)));
+				m.focus(nx, ny);
+			});
+		};
+		window.addEventListener("mousemove", onMove, { passive: true });
+		return () => {
+			window.removeEventListener("mousemove", onMove);
+			if (raf) cancelAnimationFrame(raf);
+		};
+	}, [mode]);
 
 	// 新消息滚动到底
 	useEffect(() => {
@@ -321,14 +370,14 @@ export default function Live2DHome({
 
 			{/* 底座：Canvas 手绘（坐垫/宠物小窝；日夜调色板逐帧补间，小窝前檐盖过脚边） */}
 			<PetStand
-				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 1.0 : 0.64))}
-				height={cat.stand === "nest" ? 74 : 42}
+				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 1.18 : 0.64))}
+				height={cat.stand === "nest" ? 88 : 42}
 				variant={cat.stand}
 				dark={dark}
 			/>
 
-			{/* 聊天面板（AI 已配置，从她左侧弹出） */}
-			{chatOpen && aiConfigured && (
+			{/* 聊天面板（入口常驻；未配置 AI 时展示接入指引） */}
+			{chatOpen && (
 				<div className="petstand-panel-in absolute bottom-4 right-[calc(100%+0.75rem)] flex h-72 w-[16rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
 					<div className="flex items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 dark:border-zinc-800 dark:from-amber-950/30 dark:to-orange-950/20">
 						<div className="flex items-center gap-1.5">
@@ -362,12 +411,23 @@ export default function Live2DHome({
 						ref={listRef}
 						className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2.5"
 					>
-						{messages.length === 0 && !waiting && (
+						{!aiConfigured ? (
 							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
-								跟她打个招呼吧~
+								还没接上 AI 大脑喵~
 								<br />
-								她知道这个站的各种玩法
+								管理员可在「管理面板 → 看板娘 → AI 对话」
+								<br />
+								填入 API Key 后就能和她聊天了
 							</p>
+						) : (
+							messages.length === 0 &&
+							!waiting && (
+								<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
+									跟她打个招呼吧~
+									<br />
+									她知道这个站的各种玩法
+								</p>
+							)
 						)}
 						{messages.map((m, i) => (
 							<div
@@ -409,15 +469,16 @@ export default function Live2DHome({
 						<input
 							ref={inputRef}
 							className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-amber-300 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-amber-600"
-							placeholder="说点什么…"
+							placeholder={aiConfigured ? "说点什么…" : "接入 AI 后才能聊天哦"}
 							maxLength={500}
 							value={chatInput}
 							onChange={(e) => setChatInput(e.target.value)}
+							disabled={!aiConfigured}
 						/>
 						<button
 							type="submit"
 							className="shrink-0 rounded-full bg-amber-400 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
-							disabled={waiting || !chatInput.trim()}
+							disabled={waiting || !chatInput.trim() || !aiConfigured}
 						>
 							发送
 						</button>
@@ -452,7 +513,6 @@ export default function Live2DHome({
 					ref={stageRef}
 					className="relative cursor-pointer"
 					style={{ width: STAGE_W, height: STAGE_H }}
-					onPointerMove={onStagePointerMove}
 					onClick={() => {
 						// autoInteract 关闭后手动接点击：互动动作 + 随机表情 + 台词
 						playRandom();
@@ -471,20 +531,18 @@ export default function Live2DHome({
 				</div>
 			)}
 
-			{/* 聊天入口（AI 已配置时） */}
-			{aiConfigured && (
-				<button
-					type="button"
-					title="和她聊天"
-					onClick={() => {
-						setChatOpen((o) => !o);
-						window.setTimeout(() => inputRef.current?.focus(), 120);
-					}}
-					className="absolute right-1 top-1 z-30 rounded-full bg-white/70 px-2 py-0.5 text-xs shadow backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/70 dark:hover:bg-pink-950/50"
-				>
-					💬
-				</button>
-			)}
+			{/* 聊天入口（常驻；未配置 AI 时窗口内给接入指引） */}
+			<button
+				type="button"
+				title="和她聊天"
+				onClick={() => {
+					setChatOpen((o) => !o);
+					window.setTimeout(() => inputRef.current?.focus(), 120);
+				}}
+				className="absolute right-1 top-1 z-30 rounded-full bg-white/70 px-2 py-0.5 text-xs shadow backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/70 dark:hover:bg-pink-950/50"
+			>
+				💬
+			</button>
 		</div>
 	);
 }

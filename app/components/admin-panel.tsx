@@ -833,6 +833,7 @@ export function AdminPanel({
 	const [petConfigured, setPetConfigured] = useState(false);
 	const [petModel, setPetModel] = useState("shizuku");
 	const [petSaving, setPetSaving] = useState(false);
+	const [petTesting, setPetTesting] = useState(false);
 	const [petMessage, setPetMessage] = useState<string | null>(null);
 	const [petModelMessage, setPetModelMessage] = useState<string | null>(null);
 
@@ -928,6 +929,33 @@ export function AdminPanel({
 			setPetMessage(err instanceof Error ? err.message : "保存失败");
 		} finally {
 			setPetSaving(false);
+		}
+	};
+
+	// 测试连接：真发一条消息给上游，验证 baseUrl/model/key 是否可用
+	const handleTestPet = async () => {
+		setPetTesting(true);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					messages: [{ role: "user", content: "连通测试：请只回复两个字「在的」" }],
+				}),
+			});
+			const data = (await response.json().catch(() => ({}))) as {
+				reply?: string;
+				error?: string;
+			};
+			if (!response.ok || !data.reply) {
+				throw new Error(data.error || "测试失败");
+			}
+			setPetMessage(`✓ 模型连通：${data.reply.slice(0, 60)}`);
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "测试失败");
+		} finally {
+			setPetTesting(false);
 		}
 	};
 
@@ -1679,7 +1707,7 @@ export function AdminPanel({
 									{petMessage && (
 										<p
 											className={`rounded-lg px-3 py-2 text-xs ${
-												petConfigured && petMessage.includes("已保存")
+												(petConfigured && petMessage.includes("已保存")) || petMessage.includes("✓")
 													? "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400"
 													: "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400"
 											}`}
@@ -1693,14 +1721,25 @@ export function AdminPanel({
 											保存配置
 										</button>
 										{petConfigured && (
-											<button
-												type="button"
-												className="btn-danger flex-1"
-												disabled={petSaving}
-												onClick={handleDisablePet}
-											>
-												断开 AI
-											</button>
+											<>
+												<button
+													type="button"
+													className="btn-outline flex-1"
+													disabled={petTesting}
+													onClick={handleTestPet}
+												>
+													{petTesting && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+													测试连接
+												</button>
+												<button
+													type="button"
+													className="btn-danger flex-1"
+													disabled={petSaving}
+													onClick={handleDisablePet}
+												>
+													断开 AI
+												</button>
+											</>
 										)}
 									</div>
 								</form>
