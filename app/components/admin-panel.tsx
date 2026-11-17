@@ -904,7 +904,7 @@ export function AdminPanel({
 				body: JSON.stringify({ petModel: key }),
 			});
 			if (!response.ok) throw new Error("切换失败");
-			setPetModelMessage(`已切换形象，刷新页面即可看到新的看板娘 ✨`);
+			setPetModelMessage(`已切换形象，刷新页面即可看到新的守盘助手 ✨`);
 		} catch (err) {
 			setPetModelMessage(err instanceof Error ? err.message : "切换失败");
 		}
@@ -1142,7 +1142,7 @@ export function AdminPanel({
 		{ key: "backup", label: "备份" },
 		{ key: "audit", label: "审计" },
 		{ key: "webdav", label: "WebDAV" },
-		{ key: "pet", label: "看板娘" },
+		{ key: "pet", label: "守盘助手" },
 	];
 
 	return (
@@ -1607,7 +1607,7 @@ export function AdminPanel({
 						</div>
 					)}
 
-					{/* 看板娘：形象 + AI 两件独立的事，各自保存互不相干 */}
+					{/* 守盘助手：形象 + AI 两件独立的事，各自保存互不相干 */}
 					{tab === "pet" && (
 						<div className="mx-auto max-w-lg space-y-4 py-4">
 							{/* ---- 形象选择：点谁存谁，跟 AI 配置无关 ---- */}
@@ -1615,7 +1615,7 @@ export function AdminPanel({
 								<div className="flex items-center gap-2">
 									<span aria-hidden>🌸</span>
 									<h4 className="font-semibold text-zinc-900 dark:text-zinc-100">
-										看板娘形象
+										守盘助手形象
 									</h4>
 								</div>
 								<p className="text-xs text-zinc-500">
@@ -1675,7 +1675,7 @@ export function AdminPanel({
 									</span>
 								</div>
 								<p className="text-xs leading-relaxed text-zinc-500">
-									填一个 OpenAI 兼容接口，看板娘就能聊天。不配置也不影响形象展示；
+									填一个 OpenAI 兼容接口，守盘助手就能聊天。不配置也不影响形象展示；
 									API Key 只存在服务端（D1），浏览器全程接触不到。每 IP 10 分钟 15 条、
 									单条回复 480 token 封顶，防止被薅。
 								</p>

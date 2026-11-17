@@ -1,5 +1,5 @@
 /**
- * 守盘看板娘：悬浮在页面右下角的 Live2D 形象（无房间装饰）
+ * 守盘助手：悬浮在页面右下角的 Live2D 形象（无房间装饰）
  * - 形象 / AI 开关由 home loader 服务端直读下发（无探测请求，出场快一步）
  * - 加载链并行化：runtime 脚本与渲染库同时拉，失败回退 SVG 守盘小猫（SitePet）
  * - 底座：发光椭圆台座（渐变+描边，日夜两套配色），人物站在上面不悬空
@@ -22,6 +22,7 @@ const PHRASES: string[] = [
 	"今天也把重要的东西备份好了吗？",
 	"分享链接记得设密码哦，我可是会担心的",
 	"嘿嘿，刚才那个动作可爱吗？",
+	"点旁边的「和我聊天」按钮就能和我说话哦~",
 ];
 
 const BUSY_PHRASES: string[] = [
@@ -111,6 +112,158 @@ export default function Live2DHome({
 	const { messages, waiting, chatError, sendChat, clearChat } = usePetChat({
 		skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
 	});
+
+	// ---- 助手位置（可拖拽；记忆在 localStorage） ----
+	const PET_POS_KEY = "wlist-pet-pos";
+	const [petPos, setPetPos] = useState<{ r: number; b: number } | null>(null);
+	const dragMovedRef = useRef(false); // 拖过就不再当点击处理
+	useEffect(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || "null");
+			if (saved && typeof saved.r === "number" && typeof saved.b === "number") {
+				setPetPos(saved);
+			}
+		} catch {
+			/* 损坏忽略 */
+		}
+	}, []);
+	const onPetDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		const el = e.currentTarget.closest("div.fixed") as HTMLElement | null;
+		if (!el) return;
+		const startX = e.clientX;
+		const startY = e.clientY;
+		const rect = el.getBoundingClientRect();
+		const startR = window.innerWidth - rect.right;
+		const startB = window.innerHeight - rect.bottom;
+		dragMovedRef.current = false;
+		el.setPointerCapture(e.pointerId);
+		const onMove = (ev: PointerEvent) => {
+			const dx = startX - ev.clientX;
+			const dy = startY - ev.clientY;
+			if (Math.abs(dx) + Math.abs(dy) > 6) dragMovedRef.current = true;
+			if (!dragMovedRef.current) return;
+			const r = Math.min(
+				Math.max(4, startR + dx),
+				window.innerWidth - rect.width - 4
+			);
+			const b = Math.min(
+				Math.max(4, startB + dy),
+				window.innerHeight - 40
+			);
+			setPetPos({ r, b });
+		};
+		const onUp = () => {
+			el.removeEventListener("pointermove", onMove);
+			el.removeEventListener("pointerup", onUp);
+			setPetPos((pos) => {
+				if (pos) {
+					try {
+						localStorage.setItem(PET_POS_KEY, JSON.stringify(pos));
+					} catch {
+						/* 隐私模式忽略 */
+					}
+				}
+				return pos;
+			});
+		};
+		el.addEventListener("pointermove", onMove);
+		el.addEventListener("pointerup", onUp);
+	};
+
+	// ---- 聊天面板：可拖拽 + 可缩放（记忆在 localStorage） ----
+	const PANEL_KEY = "wlist-pet-panel";
+	const [panel, setPanel] = useState<{
+		x: number;
+		y: number;
+		w: number;
+		h: number;
+	} | null>(null);
+	useEffect(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(PANEL_KEY) || "null");
+			if (saved && saved.x >= 0 && saved.w >= 240) setPanel(saved);
+		} catch {
+			/* 损坏忽略 */
+		}
+	}, []);
+	const savePanel = (p: typeof panel) => {
+		setPanel(p);
+		try {
+			if (p) localStorage.setItem(PANEL_KEY, JSON.stringify(p));
+		} catch {
+			/* 隐私模式忽略 */
+		}
+	};
+	const startPanelDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		const header = e.currentTarget;
+		const panelEl = header.closest("div") as HTMLElement;
+		const rect = panelEl.getBoundingClientRect();
+		const fixed = panel ?? {
+			x: rect.left,
+			y: rect.top,
+			w: rect.width,
+			h: rect.height,
+		};
+		const startX = e.clientX;
+		const startY = e.clientY;
+		header.setPointerCapture(e.pointerId);
+		const onMove = (ev: PointerEvent) => {
+			savePanel({
+				...fixed,
+				x: Math.min(
+					Math.max(4, fixed.x + (ev.clientX - startX)),
+					window.innerWidth - fixed.w - 4
+				),
+				y: Math.min(
+					Math.max(4, fixed.y + (ev.clientY - startY)),
+					window.innerHeight - 60
+				),
+			});
+		};
+		const onUp = () => {
+			header.removeEventListener("pointermove", onMove);
+			header.removeEventListener("pointerup", onUp);
+		};
+		header.addEventListener("pointermove", onMove);
+		header.addEventListener("pointerup", onUp);
+	};
+	const startPanelResize = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		const grip = e.currentTarget;
+		const panelEl = grip.parentElement as HTMLElement;
+		const rect = panelEl.getBoundingClientRect();
+		const fixed = panel ?? {
+			x: rect.left,
+			y: rect.top,
+			w: rect.width,
+			h: rect.height,
+		};
+		const startX = e.clientX;
+		const startY = e.clientY;
+		grip.setPointerCapture(e.pointerId);
+		const onMove = (ev: PointerEvent) => {
+			savePanel({
+				...fixed,
+				w: Math.min(
+					Math.max(240, fixed.w - (ev.clientX - startX)),
+					Math.min(520, window.innerWidth - 40)
+				),
+				h: Math.min(
+					Math.max(220, fixed.h - (ev.clientY - startY)),
+					Math.min(560, window.innerHeight - 40)
+				),
+			});
+		};
+		const onUp = () => {
+			grip.removeEventListener("pointermove", onMove);
+			grip.removeEventListener("pointerup", onUp);
+		};
+		grip.addEventListener("pointermove", onMove);
+		grip.addEventListener("pointerup", onUp);
+	};
 
 	const poke = useCallback(() => {
 		const pool = busy ? BUSY_PHRASES : PHRASES;
@@ -362,8 +515,10 @@ export default function Live2DHome({
 
 	return (
 		<div
-			className="fixed right-3 bottom-2 z-40 select-none"
+			className="fixed z-40 select-none"
 			style={{
+				right: petPos ? petPos.r : 12,
+				bottom: petPos ? petPos.b : 8,
 				width: STAGE_W * FLOAT_SCALE,
 				height: STAGE_H * FLOAT_SCALE,
 			}}
@@ -378,16 +533,32 @@ export default function Live2DHome({
 				dark={dark}
 			/>
 
-			{/* 聊天面板（入口常驻；未配置 AI 时展示接入指引） */}
+			{/* 聊天面板：入口常驻；标题栏拖拽、左下角把手缩放，位置尺寸记忆。
+			    未拖拽过时默认停靠在助手左侧 */}
 			{chatOpen && (
-				<div className="petstand-panel-in absolute bottom-4 right-[calc(100%+0.75rem)] flex h-72 w-[16rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
-					<div className="flex items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 dark:border-zinc-800 dark:from-amber-950/30 dark:to-orange-950/20">
+				<div
+					className={
+						panel
+							? "petstand-panel-in fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95"
+							: "petstand-panel-in absolute bottom-4 right-[calc(100%+0.75rem)] flex h-72 w-[16rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95"
+					}
+					style={
+						panel
+							? { left: panel.x, top: panel.y, width: panel.w, height: panel.h }
+							: undefined
+					}
+				>
+					<div
+						className="flex cursor-grab items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 active:cursor-grabbing dark:border-zinc-800 dark:from-amber-950/30 dark:to-orange-950/20"
+						onPointerDown={startPanelDrag}
+						title="按住拖动窗口位置"
+					>
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs" aria-hidden>
 								🌸
 							</span>
 							<span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-								和看板娘聊天
+								和守盘助手聊天
 							</span>
 						</div>
 						<div className="flex items-center gap-0.5">
@@ -409,6 +580,18 @@ export default function Live2DHome({
 							</button>
 						</div>
 					</div>
+					{/* 缩放把手（面板在助手左侧，拉左下角向外放大） */}
+					<div
+						className="absolute bottom-0 left-0 z-10 h-4 w-4 cursor-nwse-resize"
+						title="拖动调整窗口大小"
+						onPointerDown={startPanelResize}
+					>
+						<svg viewBox="0 0 16 16" className="h-full w-full text-zinc-300 dark:text-zinc-600" aria-hidden="true">
+							<circle cx="4" cy="12" r="1.4" fill="currentColor" />
+							<circle cx="8" cy="8" r="1.4" fill="currentColor" />
+							<circle cx="12" cy="4" r="1.4" fill="currentColor" />
+						</svg>
+					</div>
 					<div
 						ref={listRef}
 						className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2.5"
@@ -417,7 +600,7 @@ export default function Live2DHome({
 							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
 								还没接上 AI 大脑喵~
 								<br />
-								管理员可在「管理面板 → 看板娘 → AI 对话」
+								管理员可在「管理面板 → 守盘助手 → AI 对话」
 								<br />
 								填入 API Key 后就能和她聊天了
 							</p>
@@ -513,14 +696,20 @@ export default function Live2DHome({
 			>
 				<div
 					ref={stageRef}
-					className="relative cursor-pointer"
+					className="relative cursor-grab active:cursor-grabbing"
 					style={{ width: STAGE_W, height: STAGE_H }}
+					onPointerDown={onPetDragStart}
 					onClick={() => {
+						// 拖拽移动过就不再当互动点击（拖 vs 点按位移 6px 区分）
+						if (dragMovedRef.current) {
+							dragMovedRef.current = false;
+							return;
+						}
 						// autoInteract 关闭后手动接点击：互动动作 + 随机表情 + 台词
 						playRandom();
 						poke();
 					}}
-					title="点点她？会有反应哦"
+					title="点她有反应 · 按住可以拖到别处"
 				/>
 			</div>
 
@@ -528,22 +717,25 @@ export default function Live2DHome({
 			{mode === "loading" && (
 				<div className="absolute inset-x-0 bottom-6 z-20 flex justify-center">
 					<span className="animate-pulse rounded-full bg-white/80 px-3 py-1 text-xs text-amber-600 shadow dark:bg-zinc-800/80 dark:text-amber-300">
-						看板娘睡醒了穿衣服中…
+						守盘助手睡醒了穿衣服中…
 					</span>
 				</div>
 			)}
 
-			{/* 聊天入口（常驻；未配置 AI 时窗口内给接入指引） */}
+			{/* 聊天入口（常驻、醒目；跟着助手走） */}
 			<button
 				type="button"
-				title="和她聊天"
+				title="和守盘助手聊天"
 				onClick={() => {
 					setChatOpen((o) => !o);
 					window.setTimeout(() => inputRef.current?.focus(), 120);
 				}}
-				className="absolute right-1 top-1 z-30 rounded-full bg-white/70 px-2 py-0.5 text-xs shadow backdrop-blur-sm transition-colors hover:bg-pink-100 dark:bg-zinc-800/70 dark:hover:bg-pink-950/50"
+				className="absolute right-0 top-0 z-30 flex items-center gap-1 rounded-full border border-pink-200/70 bg-white/90 px-3 py-1.5 text-xs font-semibold text-pink-600 shadow-lg backdrop-blur transition hover:bg-pink-50 active:scale-95 dark:border-pink-900/50 dark:bg-zinc-800/90 dark:text-pink-300 dark:hover:bg-pink-950/50"
 			>
-				💬
+				<span className="text-sm" aria-hidden>
+					💬
+				</span>
+				和我聊天
 			</button>
 		</div>
 	);

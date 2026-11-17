@@ -1,4 +1,4 @@
-// 看板娘 API
+// 守盘助手 API
 // - GET  /api/pet   → { configured, petModel }（管理员另得 baseUrl/model/systemPrompt/hasKey）
 // - PUT  /api/pet   → 管理员保存：{ petModel } 单切形象 / { baseUrl+model+apiKey[+systemPrompt] } 配 AI / 可同带
 // - DELETE /api/pet → 管理员断开 AI
@@ -167,7 +167,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 	}
 
 	if (request.method === "DELETE") {
-		// 断开 AI：清配置，看板娘回到纯形象模式
+		// 断开 AI：清配置，守盘助手回到纯形象模式
 		if (!isAdmin) {
 			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
 		}
@@ -186,7 +186,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 		const config = await readPetAiConfig(db);
 		if (!config) {
 			return Response.json(
-				{ error: "看板娘还没接上大脑（管理员未配置 AI）" },
+				{ error: "守盘助手还没接上大脑（管理员未配置 AI）" },
 				{ status: 503 }
 			);
 		}
