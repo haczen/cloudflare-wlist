@@ -322,7 +322,7 @@ export default function Live2DHome({
 				width={Math.round(cat.h * FLOAT_SCALE * (cat.stand === "nest" ? 0.95 : 0.64))}
 				height={cat.stand === "nest" ? 56 : 42}
 				variant={cat.stand}
-				dark={isDark}
+				dark={dark}
 			/>
 
 			{/* 聊天面板（AI 已配置，从她左侧弹出） */}
