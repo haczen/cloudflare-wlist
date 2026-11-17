@@ -158,7 +158,7 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 			{chatOpen && (
 				<div className="sitepet-panel-in absolute bottom-full right-0 mb-3 flex w-[17.5rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 sm:w-72">
 					{/* 头部 */}
-					<div className="flex items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-pink-50 to-orange-50 px-3 py-2 dark:border-zinc-800 dark:from-pink-950/30 dark:to-orange-950/20">
+					<div className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-800/60">
 						<div className="flex items-center gap-1.5">
 							<span className="text-sm" aria-hidden>
 								🐱

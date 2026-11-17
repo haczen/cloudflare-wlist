@@ -549,7 +549,7 @@ export default function Live2DHome({
 					}
 				>
 					<div
-						className="flex cursor-grab items-center justify-between border-b border-zinc-100 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 active:cursor-grabbing dark:border-zinc-800 dark:from-amber-950/30 dark:to-orange-950/20"
+						className="flex cursor-grab items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2 active:cursor-grabbing dark:border-zinc-800 dark:bg-zinc-800/60"
 						onPointerDown={startPanelDrag}
 						title="按住拖动窗口位置"
 					>

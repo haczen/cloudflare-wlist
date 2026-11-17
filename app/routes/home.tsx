@@ -1673,7 +1673,7 @@ function FileBrowser({
 
 			{/* 传输盘介绍横幅（仅 pool + 公开 + 访客可传的传输盘；私有聚合盘不显示） */}
 			{folderMode === "pool" && isTransferDisk && (
-				<div className="border-b border-rose-100 bg-gradient-to-r from-rose-50 via-orange-50 to-amber-50 px-4 py-3 dark:border-rose-900/50 dark:from-rose-950/30 dark:via-zinc-900/40 dark:to-amber-950/20">
+				<div className="border-b border-rose-100 bg-amber-50 px-4 py-3 dark:border-amber-900/40 dark:bg-zinc-900">
 					<div className="flex items-start gap-3">
 						<span className="mt-0.5 text-2xl" aria-hidden>
 							📦
@@ -1809,7 +1809,7 @@ function FileBrowser({
 						输入关键词后点击「搜索」，将递归查找子目录</div>
 				) : visibleObjects.length === 0 ? (
 					<div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
-						<div className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-zinc-100 to-zinc-200 text-3xl shadow-inner dark:from-zinc-800 dark:to-zinc-900">
+						<div className="grid h-16 w-16 place-items-center rounded-2xl bg-zinc-100 text-3xl shadow-inner dark:bg-zinc-800">
 							{searchQuery.trim() || deepSearch ? "🔍" : "📂"}
 						</div>
 						<p className="text-sm text-zinc-500">
@@ -2779,13 +2779,13 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 			{/* 侧边栏 */}
 			<aside className="flex shrink-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 md:w-64 md:border-b-0 md:border-r">
 				{/* 品牌区 */}
-				<div className="border-b border-zinc-100 bg-gradient-to-br from-rose-50 via-orange-50 to-amber-50 px-4 py-3.5 dark:border-zinc-800 dark:from-zinc-900 dark:via-rose-950/30 dark:to-amber-950/20">
+				<div className="border-b border-zinc-100 bg-rose-50 px-4 py-3.5 dark:bg-zinc-900">
 					<div className="flex items-center gap-2.5">
-						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-rose-400 to-orange-400 text-white shadow-sm">
+						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-rose-400 text-white shadow-sm">
 							<CloudIcon className="h-4.5 w-4.5" />
 						</span>
 						<div className="min-w-0 flex-1">
-							<h1 className="truncate bg-gradient-to-r from-rose-500 to-orange-500 bg-clip-text text-base font-bold text-transparent dark:from-rose-300 dark:to-orange-300">
+							<h1 className="truncate text-base font-bold text-zinc-800 dark:text-zinc-100">
 								{siteTitle}
 							</h1>
 							<p className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">

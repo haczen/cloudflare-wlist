@@ -960,6 +960,7 @@ export function AdminPanel({
 	};
 
 	// 列出上游可用模型（配错模型名的救命稻草：id 以中转方为准）
+	const [petModelList, setPetModelList] = useState<string[]>([]);
 	const handleListModels = async () => {
 		setPetTesting(true);
 		setPetMessage(null);
@@ -972,12 +973,36 @@ export function AdminPanel({
 			if (!response.ok || !data.models) {
 				throw new Error(data.error || "获取失败");
 			}
-			const shown = data.models.slice(0, 12).join("、");
-			setPetMessage(
-				`可用模型（${data.models.length}）：${shown}${data.models.length > 12 ? "…" : ""}`
-			);
+			setPetModelList(data.models);
+			setPetMessage(`点下面的模型名即可切换（共 ${data.models.length} 个可用）`);
 		} catch (err) {
 			setPetMessage(err instanceof Error ? err.message : "获取失败");
+		} finally {
+			setPetTesting(false);
+		}
+	};
+
+	// 点选切换模型：沿用已存 key，只改 model 字段
+	const handleSwitchLlmModel = async (modelId: string) => {
+		if (modelId === petForm.model) return;
+		setPetTesting(true);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					baseUrl: petForm.baseUrl,
+					model: modelId,
+					apiKey: "", // 留空 = 沿用已存 key
+				}),
+			});
+			const data = (await response.json().catch(() => ({}))) as { error?: string };
+			if (!response.ok) throw new Error(data.error || "切换失败");
+			setPetForm((prev) => ({ ...prev, model: modelId }));
+			setPetMessage(`✓ 已切换到 ${modelId}，现在就能和她聊`);
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "切换失败");
 		} finally {
 			setPetTesting(false);
 		}
@@ -1704,6 +1729,27 @@ export function AdminPanel({
 											value={petForm.model}
 											onChange={(e) => setPetForm((p) => ({ ...p, model: e.target.value }))}
 										/>
+										{/* 点「可用模型」后：这里变成可点击切换的模型清单 */}
+										{petModelList.length > 0 && (
+											<div className="mt-1.5 flex flex-wrap gap-1">
+												{petModelList.map((id) => (
+													<button
+														key={id}
+														type="button"
+														className={`rounded-full border px-2 py-0.5 font-mono text-[11px] transition ${
+															petForm.model === id
+																? "border-blue-500 bg-blue-50 font-semibold text-blue-700 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-300"
+																: "border-zinc-200 text-zinc-600 hover:border-blue-300 hover:text-blue-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-blue-600 dark:hover:text-blue-300"
+														}`}
+														disabled={petTesting}
+														onClick={() => handleSwitchLlmModel(id)}
+													>
+														{id}
+														{petForm.model === id ? " ✓" : ""}
+													</button>
+												))}
+											</div>
+										)}
 									</div>
 									<div>
 										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
