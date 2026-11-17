@@ -959,6 +959,30 @@ export function AdminPanel({
 		}
 	};
 
+	// 列出上游可用模型（配错模型名的救命稻草：id 以中转方为准）
+	const handleListModels = async () => {
+		setPetTesting(true);
+		setPetMessage(null);
+		try {
+			const response = await fetch("/api/pet?models=1");
+			const data = (await response.json().catch(() => ({}))) as {
+				models?: string[];
+				error?: string;
+			};
+			if (!response.ok || !data.models) {
+				throw new Error(data.error || "获取失败");
+			}
+			const shown = data.models.slice(0, 12).join("、");
+			setPetMessage(
+				`可用模型（${data.models.length}）：${shown}${data.models.length > 12 ? "…" : ""}`
+			);
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "获取失败");
+		} finally {
+			setPetTesting(false);
+		}
+	};
+
 	const handleDisablePet = async () => {
 		if (!window.confirm("断开 AI 对话？小猫会回到纯戳一戳模式。")) return;
 		setPetSaving(true);

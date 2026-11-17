@@ -49,6 +49,43 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	await initDatabase(db);
 	const { isAdmin } = await requireAuth(request, db);
 	const config = await readPetAiConfig(db);
+
+	// 管理员诊断：?models=1 拉上游可用模型清单（用已存的 key），
+	// 解决"模型名填错"这类配置问题——模型 id 以中转方为准，肉眼猜必翻车
+	const url = new URL(request.url);
+	if (url.searchParams.get("models") === "1") {
+		if (!isAdmin) return Response.json({ error: "只有管理员可以查询" }, { status: 403 });
+		if (!config) return Response.json({ error: "尚未配置 AI" }, { status: 400 });
+		const listAt = (base: string) =>
+			fetch(`${base}/models`, {
+				headers: { Authorization: `Bearer ${config.apiKey}` },
+				signal: AbortSignal.timeout(20_000),
+			}).catch(() => null);
+		let res = await listAt(config.baseUrl);
+		if (
+			res &&
+			!res.ok &&
+			(res.status === 403 || res.status === 404) &&
+			!/\/v1$/.test(config.baseUrl)
+		) {
+			res = (await listAt(`${config.baseUrl}/v1`)) ?? res;
+		}
+		if (!res) return Response.json({ error: "上游网络不通" }, { status: 502 });
+		if (!res.ok) {
+			return Response.json(
+				{ error: `上游返回 ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}` },
+				{ status: 502 }
+			);
+		}
+		const data = (await res.json().catch(() => null)) as
+			| { data?: Array<{ id?: string }> }
+			| null;
+		const models = (data?.data ?? [])
+			.map((m) => m.id)
+			.filter((id): id is string => typeof id === "string");
+		return Response.json({ models, current: config.model });
+	}
+
 	return Response.json({
 		configured: !!config,
 		// 形象选择对全部访客可见（前端要按它加载模型）；叫 petModel 避免与管理员
