@@ -407,6 +407,9 @@ export default function Live2DHome({
 				canvas.style.width = "100%";
 				canvas.style.height = "100%";
 				canvas.style.display = "block";
+				// 独立 View Transition 快照组（.petstand-canvas）：主题圆形转场时
+				// WebGL 像素回读不进全页截图，转场不掉帧
+				canvas.className = "petstand-canvas";
 				stageRef.current.appendChild(canvas);
 				// 不需要 pixi 内置事件系统（点击/视线跟随全由 React 层手动接）：
 				// 留着它会在 pointer 事件里空转报 currentTarget.isInteractive 错

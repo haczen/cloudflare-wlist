@@ -94,13 +94,36 @@ html[data-theme="warm"] {
 	}
 }
 
-/* 主题切换转场：圆形扩散（从切换按钮的位置向全屏展开）——
-   旧画面静止垫底，新画面以 clip-path 圆形从按钮处"长"出来 */
+/* 主题切换转场：圆形扩散（从切换按钮的位置向全屏展开）。
+   性能要点：
+   - 旧快照静止垫底、新快照 clip-path 圆形展开，动画只在合成层跑（不走布局/绘制）
+   - mix-blend-mode: normal + group 时长归零：关掉 UA 默认的整层交叉淡化，
+     否则会叠在 clip 动画上产生"慢半拍/发闷"的观感（卡帧感的主要来源）
+   - Live2D 画布单独成快照组（.petstand-canvas）：WebGL 像素回读是全页截图里
+     最贵的一步，剥离后 root 快照不再碰它 */
+::view-transition-group(root) {
+	animation-duration: 0.01s;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+	mix-blend-mode: normal;
+}
 ::view-transition-old(root) {
 	animation: none;
 }
 ::view-transition-new(root) {
-	animation: wlist-theme-circle 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+	animation: wlist-theme-circle 0.38s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+/* 守盘助手画布：独立快照组，切换瞬间静帧（透明画布无感），不吃全局性能 */
+::view-transition-group(petstand),
+::view-transition-old(petstand),
+::view-transition-new(petstand) {
+	animation-duration: 0.01s;
+	animation: none;
+	mix-blend-mode: normal;
+}
+.petstand-canvas {
+	view-transition-name: petstand;
 }
 @keyframes wlist-theme-circle {
 	from {
