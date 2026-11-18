@@ -227,7 +227,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		// 形象对全部访客可见（前端按它加载模型）
 		petModel: await getPetModel(db),
 		// -1 = 无限畅聊（管理员 / 已接入自己的模型）
-		remaining: unlimited ? -1 : Math.max(0, CHAT_QUOTA - used),
+		// -1 = 无限（管理员 / 已接入自己的模型）；游客 0（前端显示登录引导）
+		remaining: !user ? 0 : unlimited ? -1 : Math.max(0, CHAT_QUOTA - used),
 		quota: CHAT_QUOTA,
 		// myMode: own=自己的模型 / site=站内模型 / null=未登录
 		myMode: user ? (ownActive ? "own" : "site") : null,
@@ -440,6 +441,13 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json(
 				{ error: "守盘助手还没接上大脑（管理员未配置 AI）" },
 				{ status: 503 }
+			);
+		}
+		// 聊天须登录：游客一律 401（对话能力是登录用户的权益）
+		if (!user) {
+			return Response.json(
+				{ error: "登录后才能和她聊天哦~（右上角登录）" },
+				{ status: 401 }
 			);
 		}
 		if (!allowChat(meta.ip || "unknown")) {

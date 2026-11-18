@@ -873,6 +873,14 @@ export default function Live2DHome({
 								<br />
 								填入 API Key 后就能和她聊天了
 							</p>
+						) : myMode === null ? (
+							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
+								登录后才能和她聊天哦~
+								<br />
+								右上角登录，每个账号可聊 5 次
+								<br />
+								（⚙ 接入自己的模型可无限畅聊）
+							</p>
 						) : (
 							messages.length === 0 &&
 							!waiting && (
@@ -934,7 +942,7 @@ export default function Live2DHome({
 								maxLength={500}
 								value={chatInput}
 								onChange={(e) => setChatInput(e.target.value)}
-								disabled={!aiConfigured || remaining === 0}
+								disabled={myMode === null || !aiConfigured || remaining === 0}
 							/>
 							<button
 								type="submit"
