@@ -572,7 +572,11 @@ export default function Live2DHome({
 				// 宠物窝造型再下沉一点——脚和小腿埋进窝里，配合前檐遮挡形成"坐进去"的实感
 				const sink = cat.stand === "nest" ? 18 : 0;
 				model.anchor.set(0.5, 1); // 底部中心 = 落在底座上
-				model.scale.set(cat.h / model.height);
+				// 缩放只算一次存进变量——model.height 是"乘以 scale 后"的派生值，
+				// set 之后再读会拿到 340（已缩小的），340/340=1.0 存进 basePose →
+				// 程序化动画一触发模型就弹回全尺寸（4500px）=「变大后看不见」的真凶
+				const baseScale = cat.h / model.height;
+				model.scale.set(baseScale);
 				model.position.set(STAGE_W * 0.5 + cat.dx, FEET_Y + sink);
 				app.stage.addChild(model);
 
@@ -604,7 +608,7 @@ export default function Live2DHome({
 				basePoseRef.current = {
 					x: STAGE_W * 0.5 + cat.dx,
 					y: FEET_Y + sink,
-					scale: cat.h / model.height,
+					scale: baseScale, // 用上面只算一次的值（此刻 model.height 已是缩小后的）
 				};
 				// 调试句柄：线上量几何用（只读无害）
 				(window as unknown as { __wlistPetModel?: unknown }).__wlistPetModel =
