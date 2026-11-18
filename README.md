@@ -2,7 +2,13 @@
 
 # WList — 跑在 Cloudflare 上的多网盘聚合存储中心
 
-一个开源、自托管的私有云盘门户：把散落在各家对象存储和网盘里的文件，聚合成**一棵统一的目录树**，配上用户体系、权限控制、在线预览、直链分享、跨桶聚合上传和免登录传输盘。全部运行在 Cloudflare Workers 免费额度内，**无需服务器**。
+[![CI](https://github.com/haczen/cloudflare-wlist/actions/workflows/ci.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/actions/workflows/ci.yml)
+[![Deploy](https://github.com/haczen/cloudflare-wlist/actions/workflows/deploy.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/actions/workflows/deploy.yml)
+[![Release](https://github.com/haczen/cloudflare-wlist/actions/workflows/release.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F6821f?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+
+一个开源、自托管的私有云盘门户：把散落在各家对象存储和网盘里的文件，聚合成**一棵统一的目录树**，配上用户体系、权限控制、在线预览、直链分享、跨桶聚合上传、免登录传输盘和 **AI 守盘助手**。全部运行在 Cloudflare Workers 免费额度内，**无需服务器**。
 
 ```
  ┌────────────────────────── WList ──────────────────────────┐
@@ -17,6 +23,13 @@
         S3/OSS/COS      WebDAV 任意      百度网盘 / 阿里云盘 / Telegram
 ```
 
+## 目录
+
+- [特色亮点](#特色亮点) · [特性](#特性)
+- [快速部署（约 5 分钟）](#快速部署约-5-分钟) · [可选集成](#github-登录可选)（GitHub 登录 / Telegram / S3 配置）
+- [守盘助手（AI 看板娘）](#守盘助手ai-看板娘)
+- [使用模型](#使用模型) · [技术栈](#技术栈) · [Star History](#star-history)
+
 ## 特色亮点
 
 - **$0 运行成本**：Workers（每日 10 万请求）+ D1（SQLite）+ 静态资源托管，全在免费额度内；push 到 main 即自动部署（GitHub Actions）
@@ -24,7 +37,8 @@
 - **传输盘 = 临时文件中转站**：不登录、拖进去、拿链接、7 天自动清理 —— 跨设备传大文件的零成本方案
 - **Telegram 也可以是你的云盘**：Bot 收文件转存、上传完成通知、TG 收藏夹当聚合盘成员
 - **桶对用户完全隐形**：授权的最小单位是「虚拟目录」，而不是某个存储后端
-- 明暗双主题、守盘小猫、可关闭的欢迎引导与站点公告 —— 开箱即是成品站
+- **守盘助手**：右下角的 Live2D 看板娘（5 款官方形象任选）会眨眼、跳舞、视线跟着你的鼠标走；接入任意 OpenAI 兼容模型后全站可对话，用户还能接入自己的 key 无限畅聊
+- 三套主题（白 / 黑 / 暖）圆框转场切换、欢迎引导与站点公告可关可改 —— 开箱即是成品站
 
 ## 特性
 
@@ -141,6 +155,29 @@ fork 后在仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLA
 
 权限判定只有一条规则：**目录是唯一的大门** —— 桶本身的配置不直接产生任何访问授权，所以「把某个目录公开 / 某个目录只给某人」都是一键操作，立即生效。
 
+## 守盘助手（AI 看板娘）
+
+右下角常驻一只 Live2D 看板娘：会眨眼、自己挑动作玩（跳舞 / 摇头 / 被捏脸…）、视线跟随你的鼠标，点击她有反应。**接入任意 OpenAI 兼容模型后，全站访客都能和她对话**。
+
+**管理员接入**（管理面板 → 守盘助手）：
+
+| 字段 | 说明 |
+|---|---|
+| API Base URL | OpenAI 兼容端点（DeepSeek / GLM / Kimi / OpenAI / 自建 Ollama / 各类中转），漏了 `/v1` 会自动补试 |
+| 模型名 | 点「可用模型」直接拉取清单，点选即切 |
+| API Key | 只存服务端 D1，浏览器全程接触不到 |
+| 人设提示词 | 可改（只有管理员可见，普通用户界面不出现） |
+| 测试连接 | 真发一条消息验证配置 |
+| 形象 | 小滴 / 山药猫 / 小黑狗 / 小饭团 / 桃濑日和 五选一，点选即存 |
+
+**对话规则**：
+
+- 管理员、以及**接入了自己模型**的用户：无限畅聊
+- 其他用户：站内模型共 **5 次**；聊天窗口 ⚙ 里填自己的 Base URL / Key（「拉清单」自动填模型名）→ 保存即无限，key 只存服务端
+- 聊天窗口可拖动位置、四条边和四角自由缩放，右下角看板娘也可以按住拖到任意位置
+
+> 模型形象来自 [Live2D](https://www.live2d.com/) 官方免费素材（见文末致谢）。
+
 ## 技术栈
 
 - [React Router v7](https://reactrouter.com/)（SSR + SPA 混合）+ Tailwind CSS v4
@@ -163,6 +200,10 @@ app/
 ├── routes/                 # 页面与 API（home / share / api.* / api.telegram）
 └── components/             # 预览器、对话框、管理面板、上传任务面板
 ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=haczen/cloudflare-wlist&type=Date)](https://star-history.com/#haczen/cloudflare-wlist&Date)
 
 ## 开源许可
 

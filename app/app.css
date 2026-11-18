@@ -19,6 +19,19 @@
 	--color-zinc-800: #28427e;
 	--color-zinc-900: #1c3262;
 	--color-zinc-950: #101c3a;
+
+	/* 强调色（按钮/链接/图标）：黑白主题=蓝；暖主题在下方覆写为咖啡 */
+	--color-accent-50: #eef4fd;
+	--color-accent-100: #dbe7fa;
+	--color-accent-200: #bfd5f5;
+	--color-accent-300: #9abcee;
+	--color-accent-400: #6f9ce4;
+	--color-accent-500: #4f80d8;
+	--color-accent-600: #3d6cc4;
+	--color-accent-700: #3255a3;
+	--color-accent-800: #2b4686;
+	--color-accent-900: #263c6d;
+	--color-accent-950: #182547;
 }
 
 /* 黑主题：黑底 + 亮蓝字（.dark 类由 JS 同步挂上） */
@@ -49,6 +62,19 @@ html[data-theme="warm"] {
 	--color-zinc-800: #493528;
 	--color-zinc-900: #382819;
 	--color-zinc-950: #221709;
+
+	/* 强调色换咖啡系 */
+	--color-accent-50: #f9f3ec;
+	--color-accent-100: #f0e4d5;
+	--color-accent-200: #e2cdb4;
+	--color-accent-300: #cfae8b;
+	--color-accent-400: #b08b60;
+	--color-accent-500: #96714a;
+	--color-accent-600: #7d5b3a;
+	--color-accent-700: #654830;
+	--color-accent-800: #523a28;
+	--color-accent-900: #43301f;
+	--color-accent-950: #291b10;
 }
 
 /* 主题切换过渡（兜底）：仅在切换瞬间由 JS 给 <html> 挂 .theme-anim（650ms 后摘除），
@@ -68,36 +94,20 @@ html[data-theme="warm"] {
 	}
 }
 
-/* 雾化过渡（主路径）：View Transitions 快照间做"雾散/雾起"的模糊溶解。
-   旧画面模糊化淡出（像被雾吞没），新画面从雾中浮现 */
+/* 主题切换转场：圆形扩散（从切换按钮的位置向全屏展开）——
+   旧画面静止垫底，新画面以 clip-path 圆形从按钮处"长"出来 */
 ::view-transition-old(root) {
-	animation: wlist-fog-out 0.62s ease both;
+	animation: none;
 }
 ::view-transition-new(root) {
-	animation: wlist-fog-in 0.62s ease both;
+	animation: wlist-theme-circle 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
-@keyframes wlist-fog-out {
-	0% {
-		opacity: 1;
-		filter: blur(0) saturate(1);
-		transform: scale(1);
+@keyframes wlist-theme-circle {
+	from {
+		clip-path: circle(0% at var(--vt-x, 92%) var(--vt-y, 94%));
 	}
-	100% {
-		opacity: 0;
-		filter: blur(20px) saturate(0.85);
-		transform: scale(1.015);
-	}
-}
-@keyframes wlist-fog-in {
-	0% {
-		opacity: 0;
-		filter: blur(20px) saturate(0.85);
-		transform: scale(0.995);
-	}
-	100% {
-		opacity: 1;
-		filter: blur(0) saturate(1);
-		transform: scale(1);
+	to {
+		clip-path: circle(145% at var(--vt-x, 92%) var(--vt-y, 94%));
 	}
 }
 @media (prefers-reduced-motion: reduce) {

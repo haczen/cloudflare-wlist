@@ -268,8 +268,9 @@ export default function Live2DHome({
 					Math.max(240, fixed.w - dx),
 					Math.min(560, window.innerWidth - 40)
 				);
+				// 左缘被拖动时右缘固定：x = 右缘 - 新宽（往左拉变宽、往右推变窄）
 				next.x = Math.min(
-					Math.max(4, fixed.x + (next.w - fixed.w)),
+					Math.max(4, fixed.x + (fixed.w - next.w)),
 					window.innerWidth - next.w - 4
 				);
 			}
@@ -284,8 +285,9 @@ export default function Live2DHome({
 					Math.max(220, fixed.h - dy),
 					Math.min(560, window.innerHeight - 40)
 				);
+				// 上缘被拖动时底缘固定：y = 底缘 - 新高
 				next.y = Math.min(
-					Math.max(4, fixed.y + (next.h - fixed.h)),
+					Math.max(4, fixed.y + (fixed.h - next.h)),
 					window.innerHeight - next.h - 4
 				);
 			}
@@ -902,7 +904,7 @@ export default function Live2DHome({
 						<div className="flex items-center gap-1.5">
 							<input
 								ref={inputRef}
-								className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-amber-300 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-amber-600"
+								className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-accent-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-accent-500"
 								placeholder={
 									!aiConfigured
 										? "接入 AI 后才能聊天哦"
@@ -917,7 +919,7 @@ export default function Live2DHome({
 							/>
 							<button
 								type="submit"
-								className="shrink-0 rounded-full bg-amber-400 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+								className="shrink-0 rounded-full bg-accent-500 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-600 disabled:opacity-50"
 								disabled={
 									waiting || !chatInput.trim() || !aiConfigured || remaining === 0
 								}
@@ -998,7 +1000,7 @@ export default function Live2DHome({
 					setChatOpen((o) => !o);
 					window.setTimeout(() => inputRef.current?.focus(), 120);
 				}}
-				className="absolute right-0 top-0 z-30 flex items-center gap-1 rounded-full border border-pink-200/70 bg-white/90 px-3 py-1.5 text-xs font-semibold text-pink-600 shadow-lg backdrop-blur transition hover:bg-pink-50 active:scale-95 dark:border-pink-900/50 dark:bg-zinc-800/90 dark:text-pink-300 dark:hover:bg-pink-950/50"
+				className="absolute right-0 top-0 z-30 flex items-center gap-1 rounded-full border border-accent-300/70 bg-white/90 px-3 py-1.5 text-xs font-semibold text-accent-600 shadow-lg backdrop-blur transition hover:bg-accent-50 active:scale-95 dark:border-accent-700 dark:bg-zinc-800/90 dark:text-accent-300 dark:hover:bg-accent-950/40"
 			>
 				<span className="text-sm" aria-hidden>
 					💬

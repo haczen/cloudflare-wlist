@@ -2372,7 +2372,13 @@ function useDarkMode() {
 		setIsDark(m === "dark");
 	}, []);
 
-	const cycle = useCallback(() => {
+	const cycle = useCallback((ev?: { clientX: number; clientY: number }) => {
+		// 圆形转场原点 = 点击位置（CSS 里 clip-path circle 用）
+		if (ev) {
+			const root = document.documentElement;
+			root.style.setProperty("--vt-x", `${ev.clientX}px`);
+			root.style.setProperty("--vt-y", `${ev.clientY}px`);
+		}
 		setMode((prev) => {
 			const next: ThemeMode =
 				prev === "light" ? "dark" : prev === "dark" ? "warm" : "light";
@@ -2533,7 +2539,7 @@ function FolderTreeItem({
 					title={`${node.name} · ${storageLabel}`}
 				>
 					<span className="flex w-full min-w-0 items-center gap-1.5">
-						<FolderIcon className="h-4 w-4 shrink-0 text-blue-500" />
+						<FolderIcon className="h-4 w-4 shrink-0 text-accent-500" />
 						<span className="min-w-0 flex-1 truncate text-sm">{node.name}</span>
 						{node.isPublic && (
 							<GlobeIcon className="h-3 w-3 shrink-0 text-emerald-500" />

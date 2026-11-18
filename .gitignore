@@ -1,30 +1,29 @@
-.DS_Store
-.env
-/node_modules/
+# 依赖与构建
+node_modules/
+build/
+.react-router/
 *.tsbuildinfo
+
+# Cloudflare / wrangler
+.wrangler/
+.dev.vars*
+!.dev.vars.example
+worker-configuration.d.ts
 wrangler.jsonc
 
-# React Router
-/.react-router/
-/build/
-/.claude/
-
-# Cloudflare
-.mf
-.wrangler
-.dev.vars*
-worker-configuration.d.ts
-
-!.dev.vars.example
+# 环境与密钥
+.env
 !.env.example
-.s3creds.json
-.storages.txt
-.r1.json
-.r2.json
-.residuals.json
-.home-check.html
-.home3.html
+*.pem
 
 # E2E 测试脚本（可能含密码，永不提交）
 .e2e-*
 
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地杂项
+.claude/

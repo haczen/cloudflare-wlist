@@ -17,7 +17,7 @@ function svgProps(className?: string) {
 // ---------- 文件类型图标 ----------
 
 export const FolderIcon = ({ className }: IconProps) => (
-	<svg {...svgProps(className)} className={className ?? "h-4 w-4 text-blue-500"}>
+	<svg {...svgProps(className)} className={className ?? "h-4 w-4 text-accent-500"}>
 		<path
 			d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
 			fill="currentColor"
