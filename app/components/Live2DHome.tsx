@@ -106,10 +106,17 @@ export default function Live2DHome({
 	const loadedKeyRef = useRef<string | null>(null);
 
 	const [chatOpen, setChatOpen] = useState(false);
+	// 设置视图（切站内模型 / 接入自己的模型）
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [siteModels, setSiteModels] = useState<string[]>([]);
+	const [ownForm, setOwnForm] = useState({ baseUrl: "", apiKey: "", model: "" });
+	const [ownModels, setOwnModels] = useState<string[]>([]);
+	const [settingsBusy, setSettingsBusy] = useState(false);
+	const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
 	const [chatInput, setChatInput] = useState("");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const { messages, waiting, chatError, sendChat, remaining, clearChat } =
+	const { messages, waiting, chatError, sendChat, remaining, myMode, myModel, refresh, clearChat } =
 		usePetChat({
 			skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
 		});
@@ -232,10 +239,11 @@ export default function Live2DHome({
 		header.addEventListener("pointermove", onMove);
 		header.addEventListener("pointerup", onUp);
 	};
-	// 缩放：三向把手——左边=调宽、下边=调高、左下角=整体大小
+	// 全向缩放：四条边 + 四个角。往哪拉就往哪个方向生长（左缘左拉变宽、
+	// 右缘右拉变宽……），位置同步贴着被拉的方向移动
 	const startPanelResize = (
 		e: React.PointerEvent<HTMLDivElement>,
-		axis: "w" | "h" | "wh"
+		dir: string // 如 "w"、"e"、"s"、"n"、"nw"、"ne"、"sw"、"se"
 	) => {
 		if (e.button !== 0) return;
 		e.stopPropagation();
@@ -255,20 +263,36 @@ export default function Live2DHome({
 			const dx = ev.clientX - startX;
 			const dy = ev.clientY - startY;
 			const next = { ...fixed };
-			if (axis === "w" || axis === "wh") {
+			if (dir.includes("w")) {
 				next.w = Math.min(
 					Math.max(240, fixed.w - dx),
-					Math.min(520, window.innerWidth - 40)
+					Math.min(560, window.innerWidth - 40)
 				);
 				next.x = Math.min(
 					Math.max(4, fixed.x + (next.w - fixed.w)),
 					window.innerWidth - next.w - 4
 				);
 			}
-			if (axis === "h" || axis === "wh") {
+			if (dir.includes("e")) {
+				next.w = Math.min(
+					Math.max(240, fixed.w + dx),
+					Math.min(560, window.innerWidth - fixed.x - 4)
+				);
+			}
+			if (dir.includes("n")) {
+				next.h = Math.min(
+					Math.max(220, fixed.h - dy),
+					Math.min(560, window.innerHeight - 40)
+				);
+				next.y = Math.min(
+					Math.max(4, fixed.y + (next.h - fixed.h)),
+					window.innerHeight - next.h - 4
+				);
+			}
+			if (dir.includes("s")) {
 				next.h = Math.min(
 					Math.max(220, fixed.h + dy),
-					Math.min(560, window.innerHeight - 40)
+					Math.min(560, window.innerHeight - fixed.y - 4)
 				);
 			}
 			savePanel(next);
@@ -580,6 +604,28 @@ export default function Live2DHome({
 						<div className="flex items-center gap-0.5">
 							<button
 								type="button"
+								title="模型设置（切站内模型 / 接入自己的模型）"
+								className={`rounded p-1 text-xs hover:bg-black/5 dark:hover:bg-white/10 ${
+									settingsOpen ? "bg-amber-100 dark:bg-amber-900/40" : ""
+								}`}
+								onClick={() => {
+									const next = !settingsOpen;
+									setSettingsOpen(next);
+									if (next && myMode === "site" && siteModels.length === 0) {
+										// 打开时顺手拉一次站内模型清单
+										void fetch("/api/pet?models=1")
+											.then((r) => (r.ok ? r.json() : null))
+											.then((d: { models?: string[] } | null) => {
+												if (d?.models) setSiteModels(d.models);
+											})
+											.catch(() => {});
+									}
+								}}
+							>
+								⚙
+							</button>
+							<button
+								type="button"
 								title="清空聊天"
 								className="rounded p-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
 								onClick={clearChat}
@@ -596,33 +642,209 @@ export default function Live2DHome({
 							</button>
 						</div>
 					</div>
-					{/* 缩放把手：左边=宽 / 下边=高 / 左下角=整体（面板在助手左侧） */}
-					<div
-						className="absolute bottom-2 left-0 top-8 z-10 w-1.5 cursor-ew-resize"
-						title="拖动调宽度"
-						onPointerDown={(e) => startPanelResize(e, "w")}
-					/>
-					<div
-						className="absolute inset-x-2 bottom-0 z-10 h-1.5 cursor-ns-resize"
-						title="拖动调高度"
-						onPointerDown={(e) => startPanelResize(e, "h")}
-					/>
-					<div
-						className="absolute bottom-0 left-0 z-20 h-4 w-4 cursor-nwse-resize"
-						title="拖动整体调整大小"
-						onPointerDown={(e) => startPanelResize(e, "wh")}
-					>
-						<svg viewBox="0 0 16 16" className="h-full w-full text-zinc-300 dark:text-zinc-600" aria-hidden="true">
-							<circle cx="4" cy="12" r="1.4" fill="currentColor" />
-							<circle cx="8" cy="8" r="1.4" fill="currentColor" />
-							<circle cx="12" cy="4" r="1.4" fill="currentColor" />
-						</svg>
-					</div>
+					{/* 全向缩放把手：四条边 + 四个角，往哪拉往哪长 */}
+					<div className="absolute bottom-2 left-0 top-9 z-10 w-1.5 cursor-ew-resize" title="拖动调宽度" onPointerDown={(e) => startPanelResize(e, "w")} />
+					<div className="absolute bottom-2 right-0 top-9 z-10 w-1.5 cursor-ew-resize" title="拖动调宽度" onPointerDown={(e) => startPanelResize(e, "e")} />
+					<div className="absolute inset-x-2 bottom-0 z-10 h-1.5 cursor-ns-resize" title="拖动调高度" onPointerDown={(e) => startPanelResize(e, "s")} />
+					<div className="absolute inset-x-2 top-8 z-10 h-1.5 cursor-ns-resize" title="拖动调高度" onPointerDown={(e) => startPanelResize(e, "n")} />
+					<div className="absolute bottom-0 left-0 z-20 h-4 w-4 cursor-nesw-resize" onPointerDown={(e) => startPanelResize(e, "sw")} />
+					<div className="absolute bottom-0 right-0 z-20 h-4 w-4 cursor-nwse-resize" onPointerDown={(e) => startPanelResize(e, "se")} />
+					<div className="absolute left-0 top-8 z-20 h-4 w-4 cursor-nwse-resize" onPointerDown={(e) => startPanelResize(e, "nw")} />
+					<div className="absolute right-0 top-8 z-20 h-4 w-4 cursor-nesw-resize" onPointerDown={(e) => startPanelResize(e, "ne")} />
 					<div
 						ref={listRef}
 						className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2.5"
 					>
-						{!aiConfigured ? (
+						{settingsOpen ? (
+							/* ---- ⚙ 设置：切站内模型 / 接入自己的模型（人设提示词只有管理员能看，这里不出现） ---- */
+							<div className="flex flex-col gap-3 text-[11.5px]">
+								{myMode === null ? (
+									<p className="py-3 text-center leading-relaxed text-zinc-400">
+										登录后可以切换站内模型、
+										<br />
+										或接入自己的模型无限畅聊
+									</p>
+								) : (
+									<>
+										{/* 站内模型 */}
+										<div>
+											<p className="mb-1 font-semibold text-zinc-700 dark:text-zinc-200">
+												站内模型{myMode === "site" ? "（当前使用）" : ""}
+											</p>
+											{siteModels.length === 0 ? (
+												<p className="text-zinc-400">加载中…（再点一次 ⚙ 刷新）</p>
+											) : (
+												<div className="flex flex-wrap gap-1">
+													{siteModels.map((id) => (
+														<button
+															key={id}
+															type="button"
+															className={`rounded-full border px-2 py-0.5 font-mono text-[11px] transition ${
+																myMode === "site" && myModel === id
+																	? "border-amber-500 bg-amber-50 font-semibold text-amber-700 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-300"
+																	: "border-zinc-200 text-zinc-600 hover:border-amber-300 hover:text-amber-600 dark:border-zinc-700 dark:text-zinc-300"
+															}`}
+															disabled={settingsBusy}
+															onClick={async () => {
+																setSettingsBusy(true);
+																setSettingsMsg(null);
+																try {
+																	const r = await fetch("/api/pet", {
+																		method: "PUT",
+																		headers: { "Content-Type": "application/json" },
+																		body: JSON.stringify({ mySiteModel: id }),
+																	});
+																	const d = (await r.json().catch(() => ({}))) as { error?: string };
+																	if (!r.ok) throw new Error(d.error || "切换失败");
+																	refresh();
+																	setSettingsMsg(`已切换站内模型：${id}`);
+																} catch (err) {
+																	setSettingsMsg(err instanceof Error ? err.message : "切换失败");
+																} finally {
+																	setSettingsBusy(false);
+																}
+															}}
+														>
+															{id}
+															{myMode === "site" && myModel === id ? " ✓" : ""}
+														</button>
+													))}
+												</div>
+											)}
+										</div>
+										{/* 接入自己的模型 */}
+										<div className="rounded-xl border border-zinc-200 p-2.5 dark:border-zinc-700">
+											<p className="mb-1.5 font-semibold text-zinc-700 dark:text-zinc-200">
+												接入自己的模型{myMode === "own" ? "（当前使用 ∞）" : "（无限畅聊）"}
+											</p>
+											<form
+												className="flex flex-col gap-1.5"
+												onSubmit={async (e) => {
+													e.preventDefault();
+													setSettingsBusy(true);
+													setSettingsMsg(null);
+													try {
+														const r = await fetch("/api/pet", {
+															method: "PUT",
+															headers: { "Content-Type": "application/json" },
+															body: JSON.stringify({ my: ownForm }),
+														});
+														const d = (await r.json().catch(() => ({}))) as { error?: string };
+														if (!r.ok) throw new Error(d.error || "保存失败");
+														refresh();
+														setSettingsMsg("✓ 已接入自己的模型，无限畅聊开始！");
+														setOwnForm((f) => ({ ...f, apiKey: "" }));
+													} catch (err) {
+														setSettingsMsg(err instanceof Error ? err.message : "保存失败");
+													} finally {
+														setSettingsBusy(false);
+													}
+												}}
+											>
+												<input
+													className="input !py-1 !text-[11.5px]"
+													placeholder="Base URL（如 https://api.deepseek.com/v1）"
+													value={ownForm.baseUrl}
+													onChange={(e) => setOwnForm((f) => ({ ...f, baseUrl: e.target.value }))}
+												/>
+												<input
+													className="input !py-1 !text-[11.5px]"
+													type="password"
+													placeholder={myMode === "own" ? "API Key（留空=沿用已保存的）" : "API Key（只存服务端，不外泄）"}
+													value={ownForm.apiKey}
+													onChange={(e) => setOwnForm((f) => ({ ...f, apiKey: e.target.value }))}
+												/>
+												<div className="flex gap-1.5">
+													<input
+														className="input min-w-0 flex-1 !py-1 !text-[11.5px]"
+														placeholder="模型名（可点下方按钮拉清单）"
+														value={ownForm.model}
+														onChange={(e) => setOwnForm((f) => ({ ...f, model: e.target.value }))}
+													/>
+													<button
+														type="button"
+														className="btn-outline shrink-0 !px-2 !py-1 !text-[11px]"
+														disabled={settingsBusy}
+														onClick={async () => {
+															setSettingsBusy(true);
+															setSettingsMsg(null);
+															try {
+																const r = await fetch("/api/pet?models=1", {
+																	method: "POST",
+																	headers: { "Content-Type": "application/json" },
+																	body: JSON.stringify({ models: ownForm }),
+																});
+																const d = (await r.json().catch(() => ({}))) as {
+																	models?: string[];
+																	error?: string;
+																};
+																if (!r.ok || !d.models) throw new Error(d.error || "拉取失败");
+																setOwnModels(d.models);
+																setSettingsMsg(`你的 key 可用（${d.models.length} 个模型），点下面的名字填入`);
+															} catch (err) {
+																setSettingsMsg(err instanceof Error ? err.message : "拉取失败");
+															} finally {
+																setSettingsBusy(false);
+															}
+														}}
+													>
+														拉清单
+													</button>
+												</div>
+												{ownModels.length > 0 && (
+													<div className="flex flex-wrap gap-1">
+														{ownModels.map((id) => (
+															<button
+																key={id}
+																type="button"
+																className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
+																	ownForm.model === id
+																		? "border-amber-500 bg-amber-50 font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+																		: "border-zinc-200 text-zinc-600 hover:border-amber-300 dark:border-zinc-700 dark:text-zinc-300"
+																}`}
+																onClick={() => setOwnForm((f) => ({ ...f, model: id }))}
+															>
+																{id}
+															</button>
+														))}
+													</div>
+												)}
+												<div className="flex gap-1.5">
+													<button type="submit" className="btn-primary flex-1 !py-1 !text-[11px]" disabled={settingsBusy}>
+														保存
+													</button>
+													{myMode === "own" && (
+														<button
+															type="button"
+															className="btn-danger flex-1 !py-1 !text-[11px]"
+															disabled={settingsBusy}
+															onClick={async () => {
+																setSettingsBusy(true);
+																try {
+																	await fetch("/api/pet?own=1", { method: "DELETE" });
+																	refresh();
+																	setSettingsMsg("已断开自己的模型，回到站内模型");
+																	setOwnModels([]);
+																} finally {
+																	setSettingsBusy(false);
+																}
+															}}
+														>
+															断开
+														</button>
+													)}
+												</div>
+											</form>
+										</div>
+									</>
+								)}
+								{settingsMsg && (
+									<p className="rounded-lg bg-zinc-100 px-2 py-1.5 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+										{settingsMsg}
+									</p>
+								)}
+							</div>
+						) : !aiConfigured ? (
 							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
 								还没接上 AI 大脑喵~
 								<br />
@@ -685,7 +907,7 @@ export default function Live2DHome({
 									!aiConfigured
 										? "接入 AI 后才能聊天哦"
 										: remaining === 0
-											? "聊天次数用完啦~"
+											? "聊天次数用完啦~（⚙ 里接入自己的模型可无限聊）"
 											: "说点什么…"
 								}
 								maxLength={500}
@@ -703,12 +925,14 @@ export default function Live2DHome({
 								发送
 							</button>
 						</div>
-						{/* 剩余次数：每次成功对话后递减，用完禁聊 */}
+						{/* 剩余次数：无限（-1）= 管理员或已接入自己的模型 */}
 						<p className="px-1 text-center text-[10.5px] text-zinc-400 dark:text-zinc-500">
 							{aiConfigured
-								? remaining === 0
-									? "聊天次数已用完（每个账号共 10 次）"
-									: `还可以聊 ${remaining ?? "…"} 次`
+								? remaining === -1
+									? "∞ 无限畅聊"
+									: remaining === 0
+										? "聊天次数已用完（共 5 次；⚙ 接入自己的模型可无限聊）"
+										: `还可以聊 ${remaining ?? "…"} 次（共 5 次）`
 								: "未接入 AI"}
 						</p>
 					</form>

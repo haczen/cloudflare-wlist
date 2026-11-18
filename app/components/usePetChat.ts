@@ -4,7 +4,7 @@
  * - 聊天记录存 localStorage wlist-pet-chat（最近 30 条，随设备不迁移）
  * - 发送：上下文只带最近 10 条（服务端有同样的钳制）
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface PetChatMessage {
 	role: "user" | "assistant";
@@ -22,33 +22,40 @@ export function usePetChat(opts?: { skipProbe?: boolean }) {
 	/** 看板娘形象 key（管理员在管理面板切换）；probed = 探测请求已返回 */
 	const [modelKey, setModelKey] = useState("shizuku");
 	const [probed, setProbed] = useState(false);
-	/** 剩余聊天次数（每身份 10 次；null=未知） */
+	/** 剩余聊天次数（-1=无限：管理员或已接入自己的模型；null=未知） */
 	const [remaining, setRemaining] = useState<number | null>(null);
+	/** 我在用哪种模型：own=自己的（无限）/ site=站内 / null=未登录 */
+	const [myMode, setMyMode] = useState<"own" | "site" | null>(null);
+	const [myModel, setMyModel] = useState<string | null>(null);
 
-	// 探测 + 恢复记录（都在 effect 里，SSR 安全）。
-	// skipProbe：调用方（Live2DHome）已从 SSR props 拿到 configured/形象，跳过这次请求
+	const probe = useCallback(async () => {
+		try {
+			const r = await fetch("/api/pet");
+			if (!r.ok) return;
+			const d = (await r.json()) as {
+				configured?: boolean;
+				petModel?: string;
+				remaining?: number;
+				myMode?: "own" | "site" | null;
+				myModel?: string | null;
+			};
+			if (!opts?.skipProbe) {
+				if (d.configured) setAiConfigured(true);
+				if (d.petModel) setModelKey(d.petModel);
+			}
+			if (typeof d.remaining === "number") setRemaining(d.remaining);
+			if (d.myMode !== undefined) setMyMode(d.myMode);
+			if (d.myModel !== undefined) setMyModel(d.myModel ?? null);
+		} catch {
+			/* 探测失败按未配置走 */
+		} finally {
+			setProbed(true);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
 	useEffect(() => {
-		// 形象/开关可来自 SSR（skipProbe 时不重复采信），但剩余次数必须问服务端
-		fetch("/api/pet")
-			.then((r) => (r.ok ? r.json() : null))
-			.then(
-				(d: {
-					configured?: boolean;
-					petModel?: string;
-					remaining?: number;
-				} | null) => {
-					if (!d) return;
-					if (!opts?.skipProbe) {
-						if (d.configured) setAiConfigured(true);
-						if (d.petModel) setModelKey(d.petModel);
-					}
-					if (typeof d.remaining === "number") setRemaining(d.remaining);
-				}
-			)
-			.catch(() => {
-				/* 探测失败按未配置走，不影响戳一戳 */
-			})
-			.finally(() => setProbed(true));
+		void probe();
 		try {
 			const saved = localStorage.getItem(CHAT_STORAGE_KEY);
 			if (saved) {
@@ -120,6 +127,10 @@ export function usePetChat(opts?: { skipProbe?: boolean }) {
 		modelKey,
 		probed,
 		remaining,
+		myMode,
+		myModel,
+		/** 保存/断开自己的模型后调用，刷新剩余次数与模式 */
+		refresh: () => void probe(),
 		clearChat: () => {
 			setMessages([]);
 			setChatError(null);

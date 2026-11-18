@@ -3030,15 +3030,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 						</button>
 					</div>
 				)}
-				{/* 公告 */}
+				{/* 公告：跟随主题（比内容区底色稍深一档的 zinc） */}
 				{showAnnouncement && (
-					<div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+					<div className="flex items-start gap-2 border-b border-zinc-200 bg-zinc-200/60 px-4 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-100">
 						<p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
 							{siteAnnouncement}
 						</p>
 						<button
 							type="button"
-							className="shrink-0 rounded p-0.5 hover:bg-amber-100 dark:hover:bg-amber-900/50"
+							className="shrink-0 rounded p-0.5 hover:bg-zinc-300/60 dark:hover:bg-zinc-700"
 							title="关闭公告"
 							onClick={() => {
 								localStorage.setItem(

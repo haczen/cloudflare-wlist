@@ -1,11 +1,18 @@
 // 守盘助手 API
-// - GET  /api/pet   → { configured, petModel }（管理员另得 baseUrl/model/systemPrompt/hasKey）
-// - PUT  /api/pet   → 管理员保存：{ petModel } 单切形象 / { baseUrl+model+apiKey[+systemPrompt] } 配 AI / 可同带
-// - DELETE /api/pet → 管理员断开 AI
-// - POST /api/pet   → 聊天代理：{ messages } → 上游 /chat/completions，key 只在服务端使用
+// - GET  /api/pet              → { configured, petModel, remaining(-1=无限), myMode, myModel }
+//   ?models=1    → 登录用户可拉站内中转的可用模型清单（用站内 key）
+//   ?models=1&own=1 → 用自己已保存的 key 拉自己的模型清单
+// - PUT  /api/pet
+//   { petModel }                          管理员：切形象
+//   { baseUrl, model, apiKey?[, systemPrompt?] } 管理员：站内 AI 配置（人设只有管理员能改）
+//   { mySiteModel }                       登录用户：选站内模型
+//   { my: { baseUrl, model, apiKey? } }   登录用户：接入自己的模型（无限畅聊）
+// - DELETE /api/pet            管理员：断开站内 AI；?own=1 登录用户：断开自己的模型
+// - POST /api/pet              聊天代理：优先用用户自己的模型（无限），否则站内模型
+//   （管理员无限；其他身份共 CHAT_QUOTA 次）
 //
-// 安全边界：chat 对所有访客开放（这正是功能），所以有每 IP 限流 + 长度/条数/token 三重钳制；
-// API key 只存 D1、只在 Worker 内拼 Authorization，浏览器永远拿不到。
+// 安全边界：所有 key 只存 D1、只在 Worker 内拼 Authorization；聊天有每 IP 频控 +
+// 非 BYOK 身份的总量配额，防薅站内 key。
 
 import type { Route } from "./+types/api.pet";
 import { requireAuth } from "~/lib/auth";
@@ -22,7 +29,16 @@ import {
 	type PetAiConfig,
 } from "~/lib/pet";
 
-// ---------- 每 IP 限流（模块内存；Workers 的 isolate 分布决定这是 best-effort，个人站足够） ----------
+/** 用户自接模型（BYOK）配置 */
+interface UserPetConfig {
+	baseUrl?: string;
+	apiKey?: string;
+	model?: string;
+	/** 站内模式下选用的站内模型 id（空 = 跟随管理员当前配置） */
+	siteModel?: string;
+}
+
+// ---------- 每 IP 频控（模块内存；best-effort，个人站足够） ----------
 
 const chatHits = new Map<string, { n: number; reset: number }>();
 const CHAT_LIMIT = 15;
@@ -32,7 +48,6 @@ function allowChat(ip: string): boolean {
 	const now = Date.now();
 	const hit = chatHits.get(ip);
 	if (!hit || now > hit.reset) {
-		// 顺手清理过期项，防 Map 无界增长
 		if (chatHits.size > 500) {
 			for (const [k, v] of chatHits) if (now > v.reset) chatHits.delete(k);
 		}
@@ -44,11 +59,10 @@ function allowChat(ip: string): boolean {
 	return true;
 }
 
-// ---------- 聊天总量配额：每个身份（登录用户 / 访客 IP）累计 10 次 ----------
+// ---------- 聊天配额：非管理员（且未接入自己的模型）累计 CHAT_QUOTA 次 ----------
 
-const CHAT_QUOTA = 10;
+const CHAT_QUOTA = 5;
 
-/** 身份键：登录用户按用户 id，访客按 IP（key 加前缀防碰撞） */
 function chatIdentity(user: { id: number } | null, ip: string): string {
 	return user ? `u:${user.id}` : `ip:${ip}`;
 }
@@ -72,33 +86,121 @@ async function bumpChatUsage(db: D1Database, key: string): Promise<number> {
 	return getChatUsage(db, key);
 }
 
+// ---------- 用户自接模型（BYOK）存取 ----------
+
+async function getUserPetConfig(
+	db: D1Database,
+	userId: number
+): Promise<UserPetConfig | null> {
+	const row = await db
+		.prepare("SELECT json FROM pet_user_config WHERE user_id = ?")
+		.bind(userId)
+		.first<{ json: string }>();
+	if (!row) return null;
+	try {
+		return JSON.parse(row.json) as UserPetConfig;
+	} catch {
+		return null;
+	}
+}
+
+async function setUserPetConfig(
+	db: D1Database,
+	userId: number,
+	cfg: UserPetConfig
+): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO pet_user_config (user_id, json) VALUES (?, ?) " +
+				"ON CONFLICT(user_id) DO UPDATE SET json = excluded.json"
+		)
+		.bind(userId, JSON.stringify(cfg))
+		.run();
+}
+
+async function deleteUserPetConfig(
+	db: D1Database,
+	userId: number
+): Promise<void> {
+	await db
+		.prepare("DELETE FROM pet_user_config WHERE user_id = ?")
+		.bind(userId)
+		.run();
+}
+
+/** OpenAI 兼容端点兜底：Base URL 少 /v1 → 403/404 时自动补试一次 */
+async function callUpstream(
+	baseUrl: string,
+	apiKey: string,
+	path: string,
+	init: RequestInit
+): Promise<Response | null> {
+	const doFetch = (b: string) =>
+		fetch(`${b}${path}`, {
+			...init,
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${apiKey}`,
+				...(init.headers || {}),
+			},
+			signal: AbortSignal.timeout(30_000),
+		}).catch(() => null);
+	let res = await doFetch(baseUrl);
+	if (
+		res &&
+		!res.ok &&
+		(res.status === 403 || res.status === 404) &&
+		!/\/v\d+$/.test(baseUrl)
+	) {
+		const retry = await doFetch(`${baseUrl}/v1`);
+		if (retry) res = retry;
+	}
+	return res;
+}
+
+async function listUpstreamModels(
+	baseUrl: string,
+	apiKey: string
+): Promise<Response> {
+	return (
+		(await callUpstream(baseUrl, apiKey, "/models", { method: "GET" })) ??
+		new Response("upstream unreachable", { status: 502 })
+	);
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
 	const db = context.cloudflare.env.DB;
 	await initDatabase(db);
-	const { isAdmin } = await requireAuth(request, db);
+	const { user, isAdmin } = await requireAuth(request, db);
+	const meta = getRequestMeta(request);
 	const config = await readPetAiConfig(db);
-
-	// 管理员诊断：?models=1 拉上游可用模型清单（用已存的 key），
-	// 解决"模型名填错"这类配置问题——模型 id 以中转方为准，肉眼猜必翻车
 	const url = new URL(request.url);
+
+	// 可用模型清单：?models=1 站内（登录用户可用）；&own=1 用自己保存的 key
 	if (url.searchParams.get("models") === "1") {
-		if (!isAdmin) return Response.json({ error: "只有管理员可以查询" }, { status: 403 });
-		if (!config) return Response.json({ error: "尚未配置 AI" }, { status: 400 });
-		const listAt = (base: string) =>
-			fetch(`${base}/models`, {
-				headers: { Authorization: `Bearer ${config.apiKey}` },
-				signal: AbortSignal.timeout(20_000),
-			}).catch(() => null);
-		let res = await listAt(config.baseUrl);
-		if (
-			res &&
-			!res.ok &&
-			(res.status === 403 || res.status === 404) &&
-			!/\/v1$/.test(config.baseUrl)
-		) {
-			res = (await listAt(`${config.baseUrl}/v1`)) ?? res;
+		let baseUrl: string;
+		let apiKey: string;
+		if (url.searchParams.get("own") === "1") {
+			if (!user) {
+				return Response.json({ error: "请先登录" }, { status: 401 });
+			}
+			const own = await getUserPetConfig(db, user.id);
+			if (!own?.baseUrl || !own?.apiKey) {
+				return Response.json({ error: "尚未接入自己的模型" }, { status: 400 });
+			}
+			baseUrl = own.baseUrl;
+			apiKey = own.apiKey;
+		} else {
+			if (!user) {
+				return Response.json({ error: "请先登录" }, { status: 401 });
+			}
+			if (!config) {
+				return Response.json({ error: "站内尚未配置 AI" }, { status: 400 });
+			}
+			baseUrl = config.baseUrl;
+			apiKey = config.apiKey;
 		}
-		if (!res) return Response.json({ error: "上游网络不通" }, { status: 502 });
+		const res = await listUpstreamModels(baseUrl, apiKey);
 		if (!res.ok) {
 			return Response.json(
 				{ error: `上游返回 ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}` },
@@ -111,21 +213,26 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		const models = (data?.data ?? [])
 			.map((m) => m.id)
 			.filter((id): id is string => typeof id === "string");
-		return Response.json({ models, current: config.model });
+		return Response.json({ models });
 	}
 
-	// 聊天剩余次数（对当前身份；面板要在下方显示）
-	const { user: me } = await requireAuth(request, db);
-	const used = await getChatUsage(db, chatIdentity(me, getRequestMeta(request).ip));
+	// 我的模式：own = 接入了自己的模型（无限）；site = 用站内的
+	const own = user ? await getUserPetConfig(db, user.id) : null;
+	const ownActive = !!(own?.baseUrl && own?.apiKey && own?.model);
+	const unlimited = ownActive || isAdmin;
+	const used = await getChatUsage(db, chatIdentity(user, meta.ip));
 
 	return Response.json({
 		configured: !!config,
-		remaining: Math.max(0, CHAT_QUOTA - used),
-		quota: CHAT_QUOTA,
-		// 形象选择对全部访客可见（前端要按它加载模型）；叫 petModel 避免与管理员
-		// 视角的 LLM model 名撞车
+		// 形象对全部访客可见（前端按它加载模型）
 		petModel: await getPetModel(db),
-		// 完整配置只给管理员，且 key 只报有无、不回传本体
+		// -1 = 无限畅聊（管理员 / 已接入自己的模型）
+		remaining: unlimited ? -1 : Math.max(0, CHAT_QUOTA - used),
+		quota: CHAT_QUOTA,
+		// myMode: own=自己的模型 / site=站内模型 / null=未登录
+		myMode: user ? (ownActive ? "own" : "site") : null,
+		myModel: ownActive ? own!.model : own?.siteModel || config?.model || null,
+		// 完整站内配置只给管理员（人设提示词只有管理员能看）
 		...(isAdmin && config
 			? {
 					baseUrl: config.baseUrl,
@@ -134,9 +241,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 					hasKey: true,
 				}
 			: {}),
-		...(isAdmin && !config
-			? { systemPrompt: DEFAULT_PET_SYSTEM_PROMPT }
-			: {}),
+		...(isAdmin && !config ? { systemPrompt: DEFAULT_PET_SYSTEM_PROMPT } : {}),
 	});
 }
 
@@ -145,14 +250,89 @@ export async function action({ request, context }: Route.ActionArgs) {
 	await initDatabase(db);
 	const { user, isAdmin } = await requireAuth(request, db);
 	const meta = getRequestMeta(request);
+	const url = new URL(request.url);
 	const body = (await request.json().catch(() => ({}))) as Record<string, any> &
-		Partial<PetAiConfig> & { petModel?: string };
+		Partial<PetAiConfig> & {
+			petModel?: string;
+			mySiteModel?: string;
+			my?: { baseUrl?: string; apiKey?: string; model?: string };
+			models?: { baseUrl?: string; apiKey?: string };
+		};
 
 	if (request.method === "PUT") {
-		if (!isAdmin) {
-			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
+		// ---- 用户自接模型 / 选站内模型（登录即可，不需要管理员）----
+		if (body.my !== undefined || body.mySiteModel !== undefined) {
+			if (!user) {
+				return Response.json({ error: "请先登录" }, { status: 401 });
+			}
+			const cur = (await getUserPetConfig(db, user.id)) || {};
+			if (typeof body.mySiteModel === "string") {
+				// 选站内模型：空串 = 跟随管理员当前配置
+				const siteConfig = await readPetAiConfig(db);
+				if (
+					body.mySiteModel &&
+					siteConfig &&
+					body.mySiteModel !== siteConfig.model
+				) {
+					// 校验确实是站内中转有的模型（防乱填）——拉一次清单
+					const res = await listUpstreamModels(
+						siteConfig.baseUrl,
+						siteConfig.apiKey
+					);
+					const data = res.ok
+						? ((await res.json().catch(() => null)) as {
+								data?: Array<{ id?: string }>;
+							} | null)
+						: null;
+					const ids = (data?.data ?? [])
+						.map((m) => m.id)
+						.filter((id): id is string => typeof id === "string");
+					if (!ids.includes(body.mySiteModel)) {
+						return Response.json({ error: "站内没有这个模型" }, { status: 400 });
+					}
+				}
+				await setUserPetConfig(db, user.id, {
+					...cur,
+					siteModel: body.mySiteModel || undefined,
+				});
+				return Response.json({ success: true });
+			}
+			if (body.my) {
+				const baseUrl = String(body.my.baseUrl || "").trim().replace(/\/+$/, "");
+				const model = String(body.my.model || "").trim();
+				// key 留空 = 沿用已保存的
+				const apiKey =
+					String(body.my.apiKey || "").trim() || cur.apiKey || "";
+				if (!baseUrl || !/^https?:\/\//.test(baseUrl)) {
+					return Response.json({ error: "Base URL 不合法（需 http(s):// 开头，一般以 /v1 结尾）" }, { status: 400 });
+				}
+				if (!model) {
+					return Response.json({ error: "模型名必填（可用下方按钮拉取清单）" }, { status: 400 });
+				}
+				if (!apiKey) {
+					return Response.json({ error: "API Key 必填" }, { status: 400 });
+				}
+				await setUserPetConfig(db, user.id, {
+					...cur,
+					baseUrl,
+					apiKey,
+					model,
+				});
+				await logAudit(db, {
+					action: "pet.own_config",
+					userType: isAdmin ? "admin" : "user",
+					ip: meta.ip,
+					userAgent: meta.userAgent,
+					detail: { baseUrl, model },
+				});
+				return Response.json({ success: true });
+			}
 		}
-		// 形象切换：可单独提交（{ petModel }），不触碰 AI 配置
+
+		if (!isAdmin) {
+			return Response.json({ error: "只有管理员可以配置站内 AI" }, { status: 403 });
+		}
+		// ---- 管理员：切形象（可单独提交）----
 		if (typeof body.petModel === "string") {
 			if (!PET_MODELS.includes(body.petModel)) {
 				return Response.json({ error: "未知形象" }, { status: 400 });
@@ -165,16 +345,18 @@ export async function action({ request, context }: Route.ActionArgs) {
 				userAgent: meta.userAgent,
 				detail: { petModel: body.petModel },
 			});
-			// 没带 AI 字段就到此为止（形象即时生效）
 			if (!body.baseUrl && !body.model && !body.apiKey) {
 				return Response.json({ success: true });
 			}
 		}
+		// ---- 管理员：站内 AI 配置 ----
 		const baseUrl = String(body.baseUrl || "").trim().replace(/\/+$/, "");
 		const model = String(body.model || "").trim();
 		const systemPrompt = String(body.systemPrompt || "").trim();
-		// key 留空 = 沿用旧值（编辑时不必回显明文）
-		const apiKey = String(body.apiKey || "").trim() || (await readPetAiConfig(db))?.apiKey || "";
+		const apiKey =
+			String(body.apiKey || "").trim() ||
+			(await readPetAiConfig(db))?.apiKey ||
+			"";
 		if (!baseUrl || !/^https?:\/\//.test(baseUrl)) {
 			return Response.json({ error: "Base URL 不合法（需 http(s):// 开头，如 https://api.deepseek.com/v1）" }, { status: 400 });
 		}
@@ -201,7 +383,14 @@ export async function action({ request, context }: Route.ActionArgs) {
 	}
 
 	if (request.method === "DELETE") {
-		// 断开 AI：清配置，守盘助手回到纯形象模式
+		// ?own=1：登录用户断开自己的模型
+		if (url.searchParams.get("own") === "1") {
+			if (!user) {
+				return Response.json({ error: "请先登录" }, { status: 401 });
+			}
+			await deleteUserPetConfig(db, user.id);
+			return Response.json({ success: true });
+		}
 		if (!isAdmin) {
 			return Response.json({ error: "只有管理员可以配置" }, { status: 403 });
 		}
@@ -217,8 +406,37 @@ export async function action({ request, context }: Route.ActionArgs) {
 	}
 
 	if (request.method === "POST") {
-		const config = await readPetAiConfig(db);
-		if (!config) {
+		// POST ?models=1：用「填了还没保存」的 key 试拉清单（接入前的体检）
+		if (url.searchParams.get("models") === "1") {
+			if (!user) {
+				return Response.json({ error: "请先登录" }, { status: 401 });
+			}
+			const baseUrl = String(body.models?.baseUrl || "").trim().replace(/\/+$/, "");
+			const apiKey = String(body.models?.apiKey || "").trim();
+			if (!/^https?:\/\//.test(baseUrl) || !apiKey) {
+				return Response.json({ error: "先填 Base URL 和 API Key" }, { status: 400 });
+			}
+			const res = await listUpstreamModels(baseUrl, apiKey);
+			if (!res.ok) {
+				return Response.json(
+					{ error: `上游返回 ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}` },
+					{ status: 502 }
+				);
+			}
+			const data = (await res.json().catch(() => null)) as
+				| { data?: Array<{ id?: string }> }
+				| null;
+			const models = (data?.data ?? [])
+				.map((m) => m.id)
+				.filter((id): id is string => typeof id === "string");
+			return Response.json({ models });
+		}
+
+		// 聊天：优先用自己的模型（无限），否则站内模型
+		const siteConfig = await readPetAiConfig(db);
+		const own = user ? await getUserPetConfig(db, user.id) : null;
+		const ownActive = !!(own?.baseUrl && own?.apiKey && own?.model);
+		if (!ownActive && !siteConfig) {
 			return Response.json(
 				{ error: "守盘助手还没接上大脑（管理员未配置 AI）" },
 				{ status: 503 }
@@ -231,23 +449,39 @@ export async function action({ request, context }: Route.ActionArgs) {
 			);
 		}
 
-		// 总量配额：每个身份（登录用户/访客 IP）累计 CHAT_QUOTA 次
+		const cfg = ownActive
+			? {
+					baseUrl: own!.baseUrl!,
+					apiKey: own!.apiKey!,
+					model: own!.model!,
+					// 用户自己的模型也套用站内人设，保持角色一致
+					systemPrompt: siteConfig?.systemPrompt,
+				}
+			: {
+					baseUrl: siteConfig!.baseUrl,
+					apiKey: siteConfig!.apiKey,
+					// 站内模式下用户可自选站内模型
+					model: own?.siteModel || siteConfig!.model,
+					systemPrompt: siteConfig!.systemPrompt,
+				};
+		const unlimited = ownActive || isAdmin;
 		const ident = chatIdentity(user, meta.ip);
-		const used = await getChatUsage(db, ident);
-		if (used >= CHAT_QUOTA) {
-			return Response.json(
-				{ error: "聊天次数用完啦~（每个账号共 10 次）", remaining: 0 },
-				{ status: 429 }
-			);
+		if (!unlimited) {
+			const used = await getChatUsage(db, ident);
+			if (used >= CHAT_QUOTA) {
+				return Response.json(
+					{
+						error: `聊天次数用完啦~（共 ${CHAT_QUOTA} 次；接入自己的模型可无限畅聊）`,
+						remaining: 0,
+					},
+					{ status: 429 }
+				);
+			}
 		}
 
-		// 注意：body 已在 action 顶部解析过一次——Request body 只能读一次，
-		// 这里再 request.json() 会抛错被 catch 成空对象 → 消息列表恒空 →
-		// 一直报「没有可回复的消息」（此前线上就是这个 bug）
 		const chatBody = body as {
 			messages?: Array<{ role?: string; content?: string }>;
 		};
-		// 上下文钳制：只认 user/assistant、最多最近 10 条、单条 1500 字
 		const history = (Array.isArray(chatBody.messages) ? chatBody.messages : [])
 			.filter(
 				(m): m is { role: "user" | "assistant"; content: string } =>
@@ -261,39 +495,23 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json({ error: "没有可回复的消息" }, { status: 400 });
 		}
 
-		const payload = JSON.stringify({
-			model: config.model,
-			messages: [
-				{ role: "system", content: config.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT },
-				...history,
-			],
-			max_tokens: 480,
-			temperature: 0.8,
+		const upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: cfg.model,
+				messages: [
+					{
+						role: "system",
+						content: cfg.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT,
+					},
+					...history,
+				],
+				max_tokens: 480,
+				temperature: 0.8,
+			}),
 		});
-		const call = (base: string) =>
-			fetch(`${base}/chat/completions`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${config.apiKey}`,
-				},
-				body: payload,
-				signal: AbortSignal.timeout(30_000),
-			}).catch(() => null);
-
-		let upstream = await call(config.baseUrl);
 		if (!upstream) {
 			return Response.json({ error: "上游网络不通（检查 Base URL / 模型名）" }, { status: 502 });
-		}
-		// OpenAI 兼容配置第一大坑：Base URL 少了 /v1 → 上游 403/404 或怪异报错。
-		// 这种情况自动补 /v1 重试一次，用户不必摸索
-		if (
-			!upstream.ok &&
-			(upstream.status === 403 || upstream.status === 404) &&
-			!/\/v1$/.test(config.baseUrl)
-		) {
-			const retry = await call(`${config.baseUrl}/v1`);
-			if (retry) upstream = retry;
 		}
 		if (!upstream.ok) {
 			const text = (await upstream.text().catch(() => "")).slice(0, 300);
@@ -315,7 +533,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 		if (!reply) {
 			return Response.json({ error: "上游没说话（回复为空）" }, { status: 502 });
 		}
-		// 成功回复才计数；返回剩余次数供面板显示
+		// 成功回复才计数（无限身份不计数）
+		if (unlimited) {
+			return Response.json({ reply, remaining: -1 });
+		}
 		const n = await bumpChatUsage(db, ident);
 		return Response.json({ reply, remaining: Math.max(0, CHAT_QUOTA - n) });
 	}

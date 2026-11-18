@@ -449,6 +449,11 @@ export async function initDatabase(db: D1Database): Promise<void> {
       k TEXT PRIMARY KEY,
       n INTEGER NOT NULL DEFAULT 0
     )`,
+		// 用户自接的 AI 模型（BYOK：接入自己的 key 后无限畅聊）
+		`CREATE TABLE IF NOT EXISTS pet_user_config (
+      user_id INTEGER PRIMARY KEY,
+      json TEXT NOT NULL
+    )`,
 		`CREATE INDEX IF NOT EXISTS idx_tg_objects_storage ON tg_objects(storage_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_storages_is_public ON storages(is_public)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
