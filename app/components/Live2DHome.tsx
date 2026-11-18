@@ -140,7 +140,9 @@ export default function Live2DHome({
 			const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || "null");
 			if (saved && typeof saved.r === "number" && typeof saved.b === "number") {
 				// 夹回当前视口内：位置是按保存时的窗口尺寸算的绝对像素，
-				// 窗口缩小（缩放/分屏/换了设备）后原值会把助手排到屏幕外=「消失」
+				// 窗口缩小（缩放/分屏/换了设备）后原值会把助手排到屏幕外=「消失」。
+				// 注意上下边界必须按容器自身高度算（此前误用 60——拖到上方后
+				// 容器顶部整段被排到屏幕外 = 「只显示一半」的根因）
 				const w = STAGE_W * FLOAT_SCALE;
 				const h = STAGE_H * FLOAT_SCALE;
 				const r = Math.min(
@@ -149,7 +151,7 @@ export default function Live2DHome({
 				);
 				const b = Math.min(
 					Math.max(4, saved.b),
-					Math.max(4, window.innerHeight - 60)
+					Math.max(4, window.innerHeight - h - 4)
 				);
 				setPetPos({ r, b });
 			}
@@ -177,9 +179,11 @@ export default function Live2DHome({
 				Math.max(4, startR + dx),
 				window.innerWidth - rect.width - 4
 			);
+			// 上界按容器高度算：b 最大 = 视口高 - 容器高 - 4（顶边贴住上沿），
+			// 否则拖到上方后顶部被屏幕裁掉 = 只显示一半
 			const b = Math.min(
 				Math.max(4, startB + dy),
-				window.innerHeight - 40
+				window.innerHeight - rect.height - 4
 			);
 			setPetPos({ r, b });
 		};
