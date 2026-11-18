@@ -1673,26 +1673,26 @@ function FileBrowser({
 
 			{/* 传输盘介绍横幅（仅 pool + 公开 + 访客可传的传输盘；私有聚合盘不显示） */}
 			{folderMode === "pool" && isTransferDisk && (
-				<div className="border-b border-rose-100 bg-amber-50 px-4 py-3 dark:border-amber-900/40 dark:bg-zinc-900">
+				<div className="border-b border-accent-200 bg-accent-50 px-4 py-3 dark:border-accent-900 dark:bg-zinc-900">
 					<div className="flex items-start gap-3">
 						<span className="mt-0.5 text-2xl" aria-hidden>
 							📦
 						</span>
 						<div className="min-w-0 flex-1">
-							<h3 className="text-sm font-semibold text-rose-900 dark:text-rose-200">
+							<h3 className="text-sm font-semibold text-accent-900 dark:text-accent-200">
 								{rootLabel} · 公共传输盘
 							</h3>
-							<p className="mt-1 text-xs leading-relaxed text-rose-800/85 dark:text-rose-200/80">
+							<p className="mt-1 text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
 								面向所有用户的中转盘：<strong>无需登录</strong>
 								即可上传、下载；登录用户可以删除<strong>自己上传</strong>的文件。
 								大文件会自动切片分布到多个网盘，下载时自动拼回完整原件。
-								<span className="ml-1 rounded-md bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+								<span className="ml-1 rounded-md bg-accent-100 px-1.5 py-0.5 font-medium text-accent-700 dark:bg-accent-950/60 dark:text-accent-300">
 									⏰ 文件保留 7 天，到期自动清理
 								</span>
 								，重要内容请及时转存。
 							</p>
 							{canUpload && (
-								<p className="mt-1 text-[11px] text-rose-600/70 dark:text-rose-300/60">
+								<p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
 									💡 把文件拖到页面任意位置即可上传 · 支持 Ctrl+V 粘贴上传 · 断网刷新页面可续传
 								</p>
 							)}
@@ -1934,7 +1934,7 @@ function FileBrowser({
 											</span>
 											{obj.pool && obj.poolBuckets && (
 												<span
-													className="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium leading-none text-rose-600 dark:bg-rose-950/60 dark:text-rose-300"
+													className="shrink-0 rounded bg-accent-100 px-1.5 py-0.5 text-[10px] font-medium leading-none text-accent-600 dark:bg-accent-950/60 dark:text-accent-300"
 													title={obj.poolDetail}
 												>
 													📦 {obj.poolBuckets}
@@ -2546,7 +2546,7 @@ function FolderTreeItem({
 						)}
 						{node.isPublic && node.guestUpload && (
 							<UploadIcon
-								className="h-3 w-3 shrink-0 text-amber-500"
+								className="h-3 w-3 shrink-0 text-accent-500"
 							/>
 						)}
 					</span>
@@ -2571,7 +2571,7 @@ function FolderTreeItem({
 								type="button"
 								className={`rounded p-1 hover:bg-zinc-200 dark:hover:bg-zinc-700 ${
 									node.guestUpload
-										? "text-amber-500"
+										? "text-accent-500"
 										: "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
 								}`}
 								title={
