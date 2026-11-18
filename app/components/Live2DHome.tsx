@@ -87,6 +87,8 @@ export default function Live2DHome({
 }) {
 	// 'loading' = 决定用 Live2D 还是回退；'live2d' | 'svg'
 	const [mode, setMode] = useState<"loading" | "live2d" | "svg">("loading");
+	/** WebGL 上下文丢失自愈后强制重载模型用 */
+	const [reloadNonce, setReloadNonce] = useState(0);
 	const [phrase, setPhrase] = useState<string | null>(null);
 	const phraseTimer = useRef<number | undefined>(undefined);
 
@@ -130,11 +132,24 @@ export default function Live2DHome({
 	const PET_POS_KEY = "wlist-pet-pos";
 	const [petPos, setPetPos] = useState<{ r: number; b: number } | null>(null);
 	const dragMovedRef = useRef(false); // 拖过就不再当点击处理
+	const lastTapRef = useRef(0); // 点击冷却时间戳
 	useEffect(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || "null");
 			if (saved && typeof saved.r === "number" && typeof saved.b === "number") {
-				setPetPos(saved);
+				// 夹回当前视口内：位置是按保存时的窗口尺寸算的绝对像素，
+				// 窗口缩小（缩放/分屏/换了设备）后原值会把助手排到屏幕外=「消失」
+				const w = STAGE_W * FLOAT_SCALE;
+				const h = STAGE_H * FLOAT_SCALE;
+				const r = Math.min(
+					Math.max(4, saved.r),
+					Math.max(4, window.innerWidth - w - 4)
+				);
+				const b = Math.min(
+					Math.max(4, saved.b),
+					Math.max(4, window.innerHeight - 60)
+				);
+				setPetPos({ r, b });
 			}
 		} catch {
 			/* 损坏忽略 */
@@ -172,6 +187,10 @@ export default function Live2DHome({
 			// pointer capture 会把后续 click 重定向到容器层——stage 的 onClick
 			// 收不到。所以"点击"在这里判：按下后没拖动（<6px）= 互动
 			if (!dragMovedRef.current) {
+				// 连点冷却：350ms 内的重复点击不堆动作（狂点易把动画/GPU 打挂）
+				const now = performance.now();
+				if (now - lastTapRef.current < 350) return;
+				lastTapRef.current = now;
 				playRandom();
 				poke();
 				// 过半概率再送一个程序化小动作（跳/摇/弹），三成概率 600ms 后连招
@@ -495,6 +514,18 @@ export default function Live2DHome({
 				// WebGL 像素回读不进全页截图，转场不掉帧
 				canvas.className = "petstand-canvas";
 				stageRef.current.appendChild(canvas);
+				// WebGL 上下文丢失（GPU 驱动回收/负载高时偶发）→ 画布变空白像「消失」；
+				// 阻止默认丢渲染，恢复事件里强制重载模型
+				canvas.addEventListener(
+					"webglcontextlost",
+					(e) => e.preventDefault(),
+					false
+				);
+				canvas.addEventListener(
+					"webglcontextrestored",
+					() => setReloadNonce((n) => n + 1),
+					false
+				);
 				// 不需要 pixi 内置事件系统（点击/视线跟随全由 React 层手动接）：
 				// 留着它会在 pointer 事件里空转报 currentTarget.isInteractive 错
 				try {
@@ -570,7 +601,7 @@ export default function Live2DHome({
 			appRef.current = null;
 			modelRef.current = null;
 		};
-	}, [modelKey]);
+	}, [modelKey, reloadNonce]);
 
 	// 灵动时钟：动作与说话分开计时——
 	// 动作（换表情/小舞蹈）每 10~22s 一次；说话每 14~28s 冒一句（不点击也会说）
