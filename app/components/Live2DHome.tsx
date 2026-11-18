@@ -164,6 +164,17 @@ export default function Live2DHome({
 		const onUp = () => {
 			el.removeEventListener("pointermove", onMove);
 			el.removeEventListener("pointerup", onUp);
+			// pointer capture 会把后续 click 重定向到容器层——stage 的 onClick
+			// 收不到。所以"点击"在这里判：按下后没拖动（<6px）= 互动
+			if (!dragMovedRef.current) {
+				playRandom();
+				poke();
+				// 偶发小连招：约三成概率 600ms 后再接一个动作，更有"回应感"
+				if (Math.random() < 0.3) {
+					window.setTimeout(() => playRandom(), 600);
+				}
+				return;
+			}
 			setPetPos((pos) => {
 				if (pos) {
 					try {
@@ -441,7 +452,11 @@ export default function Live2DHome({
 
 				// 从模型清单提取可玩动组 / 表情名（cubism4 与 cubism2 的清单结构不同）
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				const settings = (model.settings ?? {}) as any;
+				// 动组/表情清单在 internalModel.settings 上（model.settings 是空的）
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const settings = ((model as any).internalModel?.settings ??
+					(model as any).settings ??
+					{}) as any;
 				const motionTable =
 					settings.FileReferences?.Motions ?? settings.motions ?? {};
 				playGroupsRef.current = Object.keys(motionTable).filter(
@@ -973,16 +988,8 @@ export default function Live2DHome({
 					className="relative cursor-grab active:cursor-grabbing"
 					style={{ width: STAGE_W, height: STAGE_H }}
 					onPointerDown={onPetDragStart}
-					onClick={() => {
-						// 拖拽移动过就不再当互动点击（拖 vs 点按位移 6px 区分）
-						if (dragMovedRef.current) {
-							dragMovedRef.current = false;
-							return;
-						}
-						// autoInteract 关闭后手动接点击：互动动作 + 随机表情 + 台词
-						playRandom();
-						poke();
-					}}
+					// 点击互动在 onPetDragStart 的 pointerup 里判（按下未拖 = 点击）——
+					// pointer capture 重定向后这里的 onClick 收不到事件
 					title="点她有反应 · 按住可以拖到别处"
 				/>
 			</div>
