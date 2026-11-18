@@ -960,16 +960,16 @@ export default function Live2DHome({
 				</div>
 			)}
 
-			{/* 台词气泡（头顶上方） */}
+			{/* 台词气泡（头顶上方、靠左排布——右边界止步于「和我聊天」按钮之前，不重叠） */}
 			{phrase && (
 				<div
-					className="petstand-bubble-in absolute left-1/2 z-20 w-max max-w-[12rem] -translate-x-1/2"
-					style={{ top: -8 }}
+					className="petstand-bubble-in absolute z-20 w-max"
+					style={{ top: -10, left: -10, maxWidth: "calc(100% - 6.5rem)" }}
 					role="status"
 				>
 					<div className="relative rounded-2xl border border-zinc-200 bg-white px-3.5 py-2 text-center text-[13px] text-zinc-700 shadow-lg dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
 						{phrase}
-						<span className="absolute bottom-0 left-1/2 h-2.5 w-2.5 translate-y-1/2 rotate-45 border-b border-r border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800" />
+						<span className="absolute bottom-0 left-[60%] h-2.5 w-2.5 translate-y-1/2 rotate-45 border-b border-r border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800" />
 					</div>
 				</div>
 			)}
