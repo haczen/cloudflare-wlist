@@ -1,3 +1,5 @@
+<a href="https://linux.do"><img src="https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA-FFB003?style=flat-square" alt="LINUX DO 社区" /></a>
+
 # WList — 跑在 Cloudflare 上的多网盘聚合存储中心
 
 一个开源、自托管的私有云盘门户：把散落在各家对象存储和网盘里的文件，聚合成**一棵统一的目录树**，配上用户体系、权限控制、在线预览、直链分享、跨桶聚合上传和免登录传输盘。全部运行在 Cloudflare Workers 免费额度内，**无需服务器**。
