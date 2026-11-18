@@ -63,8 +63,8 @@ function allowChat(ip: string): boolean {
 
 const CHAT_QUOTA = 5;
 
-function chatIdentity(user: { id: number } | null, ip: string): string {
-	return user ? `u:${user.id}` : `ip:${ip}`;
+function chatIdentity(user: { id: number } | null, ip: string | null): string {
+	return user ? `u:${user.id}` : `ip:${ip || "unknown"}`;
 }
 
 async function getChatUsage(db: D1Database, key: string): Promise<number> {
@@ -442,7 +442,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 				{ status: 503 }
 			);
 		}
-		if (!allowChat(meta.ip)) {
+		if (!allowChat(meta.ip || "unknown")) {
 			return Response.json(
 				{ error: "累了喵，休息一会儿再聊~（10 分钟内次数用完）" },
 				{ status: 429 }

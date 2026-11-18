@@ -620,8 +620,9 @@ export default function Live2DHome({
 										// 打开时顺手拉一次站内模型清单
 										void fetch("/api/pet?models=1")
 											.then((r) => (r.ok ? r.json() : null))
-											.then((d: { models?: string[] } | null) => {
-												if (d?.models) setSiteModels(d.models);
+											.then((d) => {
+												const dd = d as { models?: string[] } | null;
+												if (dd?.models) setSiteModels(dd.models);
 											})
 											.catch(() => {});
 									}

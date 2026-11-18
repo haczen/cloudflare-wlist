@@ -407,7 +407,7 @@ function drawNestFront(
 		ry - rimT * 0.78,
 		0,
 		Math.PI,
-		true
+		1
 	);
 	ctx.closePath();
 	ctx.fillStyle = grad;
