@@ -22,7 +22,7 @@ export const PET_AI_SETTING_KEY = "pet_ai";
 
 /** 可选形象（与服务端校验、管理面板、前端目录保持一致；不含 Cubism5 模型——需 Core 5 运行时暂不引入） */
 export const PET_MODELS = ["shizuku", "tororo", "hijiki", "rice", "hiyori"];
-export const PET_MODEL_DEFAULT = "shizuku";
+export const PET_MODEL_DEFAULT = "rice";
 
 async function readSetting(db: D1Database, key: string): Promise<string | null> {
 	const row = await db

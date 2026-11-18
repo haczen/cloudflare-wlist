@@ -40,7 +40,7 @@ const MODEL_CATALOG = [
 	{ key: "shizuku", file: "/live2d/shizuku/shizuku.model.json", gen: 2, h: 260, stand: "cushion", dx: -3 },
 	{ key: "tororo", file: "/live2d/tororo/tororo.model3.json", gen: 4, h: 270, stand: "nest", dx: -5 },
 	{ key: "hijiki", file: "/live2d/hijiki/hijiki.model3.json", gen: 4, h: 270, stand: "nest", dx: -4 },
-	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 300, stand: "cushion", dx: -70 },
+	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 340, stand: "cushion", dx: -70 },
 	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 390, stand: "cushion", dx: -1 },
 ] as const;
 
@@ -98,6 +98,11 @@ export default function Live2DHome({
 		expression: (name: string) => unknown;
 		height: number;
 		width: number;
+		/** 程序化动画用：transform 属性（pixi DisplayObject） */
+		x: number;
+		y: number;
+		rotation: number;
+		scale: { set: (v: number) => void };
 	} | null>(null);
 	// 模型清单解析出的可玩动作组 / 表情名（各模型差异大，加载时提取）
 	const playGroupsRef = useRef<string[]>([]);
@@ -169,7 +174,8 @@ export default function Live2DHome({
 			if (!dragMovedRef.current) {
 				playRandom();
 				poke();
-				// 偶发小连招：约三成概率 600ms 后再接一个动作，更有"回应感"
+				// 过半概率再送一个程序化小动作（跳/摇/弹），三成概率 600ms 后连招
+				if (Math.random() < 0.55) flourish();
 				if (Math.random() < 0.3) {
 					window.setTimeout(() => playRandom(), 600);
 				}
@@ -339,6 +345,73 @@ export default function Live2DHome({
 		}
 	}, []);
 
+	// ---- 程序化小动作：模型自带动作之外的自编动画（跳/摇/弹），所有形象通用 ----
+	const basePoseRef = useRef<{ x: number; y: number; scale: number } | null>(null);
+	const animRafRef = useRef<number | undefined>(undefined);
+	const animTokenRef = useRef(0); // 新动画打断旧动画
+
+	const runAnim = useCallback((fn: (p: number) => void, ms: number) => {
+		const base = basePoseRef.current;
+		if (!base || !modelRef.current) return;
+		const token = ++animTokenRef.current;
+		if (animRafRef.current) cancelAnimationFrame(animRafRef.current);
+		const t0 = performance.now();
+		const step = (now: number) => {
+			const m = modelRef.current;
+			const b = basePoseRef.current;
+			if (animTokenRef.current !== token || !m || !b) return;
+			const p = Math.min(1, (now - t0) / ms);
+			fn(p);
+			if (p < 1) animRafRef.current = requestAnimationFrame(step);
+		};
+		animRafRef.current = requestAnimationFrame(step);
+	}, []);
+
+	/** 跳一下（离地 + 舒展 + 轻微回摆） */
+	const hopAnim = useCallback(() => {
+		runAnim((p) => {
+			const m = modelRef.current;
+			const b = basePoseRef.current;
+			if (!m || !b) return;
+			const lift = Math.sin(p * Math.PI);
+			m.y = b.y - lift * 20;
+			m.scale.set(b.scale * (1 + lift * 0.05));
+			m.rotation = Math.sin(p * Math.PI * 2) * 0.03;
+		}, 520);
+	}, [runAnim]);
+
+	/** 左右摇摆（绕脚底打摆子） */
+	const swayAnim = useCallback(() => {
+		runAnim((p) => {
+			const m = modelRef.current;
+			const b = basePoseRef.current;
+			if (!m || !b) return;
+			const env = Math.sin(p * Math.PI); // 两端收住
+			m.rotation = Math.sin(p * Math.PI * 4) * 0.07 * env;
+			m.x = b.x + Math.sin(p * Math.PI * 2) * 6 * env;
+		}, 900);
+	}, [runAnim]);
+
+	/** 弹一弹（压扁→回弹） */
+	const bounceAnim = useCallback(() => {
+		runAnim((p) => {
+			const m = modelRef.current;
+			const b = basePoseRef.current;
+			if (!m || !b) return;
+			const k = Math.sin(p * Math.PI) * (1 - p * 0.25);
+			m.scale.set(b.scale * (1 - 0.05 * k));
+			m.y = b.y + 5 * k;
+		}, 420);
+	}, [runAnim]);
+
+	/** 随机挑一个程序化小动作 */
+	const flourish = useCallback(() => {
+		const pick = Math.random();
+		if (pick < 0.4) hopAnim();
+		else if (pick < 0.75) swayAnim();
+		else bounceAnim();
+	}, [hopAnim, swayAnim, bounceAnim]);
+
 	// 卸载清理
 	useEffect(() => {
 		return () => {
@@ -474,6 +547,12 @@ export default function Live2DHome({
 
 				appRef.current = app;
 				modelRef.current = model;
+				// 程序化动作的基准姿态（模型自带动作之外的自编小动作：跳/摇/弹）
+				basePoseRef.current = {
+					x: STAGE_W * 0.5 + cat.dx,
+					y: FEET_Y + sink,
+					scale: cat.h / model.height,
+				};
 				// 调试句柄：线上量几何用（只读无害）
 				(window as unknown as { __wlistPetModel?: unknown }).__wlistPetModel =
 					model;
@@ -504,6 +583,7 @@ export default function Live2DHome({
 			motionTimer = window.setTimeout(() => {
 				if (stopped) return;
 				playRandom();
+				if (Math.random() < 0.4) flourish();
 				loopMotion();
 			}, 10_000 + Math.random() * 12_000);
 		};
