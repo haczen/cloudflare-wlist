@@ -221,7 +221,7 @@ export function StorageFormDialog({
 									onClick={() => setType(option.value)}
 									className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${
 										type === option.value
-											? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+											? "border-accent-500 bg-accent-50 text-accent-700 dark:bg-accent-950/40 dark:text-accent-300"
 											: "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
 									} ${isEdit ? "cursor-not-allowed opacity-60" : ""}`}
 									title={option.hint}
@@ -1181,7 +1181,7 @@ export function AdminPanel({
 				{/* 头部 */}
 				<div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5 dark:border-zinc-800">
 					<div className="flex items-center gap-2">
-						<ShieldIcon className="h-4 w-4 text-blue-600" />
+						<ShieldIcon className="h-4 w-4 text-accent-600" />
 						<h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
 							管理面板
 						</h3>
@@ -1200,7 +1200,7 @@ export function AdminPanel({
 							onClick={() => setTab(item.key)}
 							className={`rounded-t-lg px-3.5 py-2 text-sm font-medium transition-colors ${
 								tab === item.key
-									? "border-b-2 border-blue-600 text-blue-600 dark:text-blue-400"
+									? "border-b-2 border-accent-600 text-accent-600 dark:text-accent-400"
 									: "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300"
 							}`}
 						>
@@ -1243,7 +1243,7 @@ export function AdminPanel({
 												</span>
 											)}
 											{storage.guestUpload && (
-												<span className="badge bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+												<span className="badge bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400">
 													访客可传
 												</span>
 											)}
@@ -1329,7 +1329,7 @@ export function AdminPanel({
 												@{user.username}
 											</span>
 											{user.role === "admin" && (
-												<span className="badge bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+												<span className="badge bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400">
 													管理员
 												</span>
 											)}
@@ -1557,7 +1557,7 @@ export function AdminPanel({
 													<span
 														className={`badge ${
 															log.userType === "admin"
-																? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+																? "bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400"
 																: log.userType === "share"
 																	? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
 																	: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
@@ -1738,8 +1738,8 @@ export function AdminPanel({
 														type="button"
 														className={`rounded-full border px-2 py-0.5 font-mono text-[11px] transition ${
 															petForm.model === id
-																? "border-blue-500 bg-blue-50 font-semibold text-blue-700 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-300"
-																: "border-zinc-200 text-zinc-600 hover:border-blue-300 hover:text-blue-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-blue-600 dark:hover:text-blue-300"
+																? "border-accent-500 bg-accent-50 font-semibold text-accent-700 dark:border-accent-500 dark:bg-accent-950/50 dark:text-accent-300"
+																: "border-zinc-200 text-zinc-600 hover:border-accent-300 hover:text-accent-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-accent-600 dark:hover:text-accent-300"
 														}`}
 														disabled={petTesting}
 														onClick={() => handleSwitchLlmModel(id)}

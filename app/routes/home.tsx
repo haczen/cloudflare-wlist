@@ -1475,7 +1475,7 @@ function FileBrowser({
 				</div>
 				<button
 					type="button"
-					className={`btn-ghost !px-2 !text-xs ${deepSearch ? "!text-blue-600 dark:!text-blue-400" : ""}`}
+					className={`btn-ghost !px-2 !text-xs ${deepSearch ? "!text-accent-600 dark:!text-accent-400" : ""}`}
 					title="深度搜索：递归遍历子目录查找（最多 300 个目录）"
 					onClick={() => {
 						setDeepSearch((prev) => !prev);
@@ -1506,7 +1506,7 @@ function FileBrowser({
 							type="button"
 							className={`px-2.5 py-1.5 transition-colors ${
 								viewMode === mode
-									? "bg-blue-600 text-white"
+									? "bg-accent-600 text-white"
 									: "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
 							}`}
 							onClick={() => setViewMode(mode)}
@@ -1607,7 +1607,7 @@ function FileBrowser({
 							<label
 								className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 transition ${
 									!poolWithTg
-										? "border-blue-400 bg-blue-50/60 dark:border-blue-500 dark:bg-blue-500/10"
+										? "border-accent-400 bg-accent-50/60 dark:border-accent-500 dark:bg-accent-500/10"
 										: "border-zinc-200 dark:border-zinc-700"
 								}`}
 							>
@@ -1703,8 +1703,8 @@ function FileBrowser({
 
 			{/* 批量操作条 */}
 			{selectedKeys.size > 0 && (
-				<div className="flex flex-wrap items-center gap-2 border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm dark:border-blue-900 dark:bg-blue-950/40">
-					<span className="text-blue-700 dark:text-blue-300">
+				<div className="flex flex-wrap items-center gap-2 border-b border-accent-200 bg-accent-50 px-4 py-2 text-sm dark:border-accent-900 dark:bg-accent-950/40">
+					<span className="text-accent-700 dark:text-accent-300">
 						已选 {selectedKeys.size} 项
 					</span>
 					{canDownload && (
@@ -1757,9 +1757,9 @@ function FileBrowser({
 			>
 				{/* 拖拽遮罩 */}
 				{dragOver && canUpload && (
-					<div className="pointer-events-none absolute inset-3 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-blue-500 bg-blue-500/10 backdrop-blur-sm">
-						<UploadIcon className="h-10 w-10 text-blue-600" />
-						<p className="text-sm font-medium text-blue-700 dark:text-blue-300">
+					<div className="pointer-events-none absolute inset-3 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-accent-500 bg-accent-500/10 backdrop-blur-sm">
+						<UploadIcon className="h-10 w-10 text-accent-600" />
+						<p className="text-sm font-medium text-accent-700 dark:text-accent-300">
 							松开鼠标上传到{path ? ` /${path}` : "根目录"}
 						</p>
 					</div>
@@ -1767,7 +1767,7 @@ function FileBrowser({
 
 				{/* 入队去重提示（同名任务已在队列） */}
 				{uploadHint && (
-					<div className="m-4 flex items-start gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-600 dark:bg-blue-950/40 dark:text-blue-400">
+					<div className="m-4 flex items-start gap-2 rounded-lg bg-accent-50 px-3 py-2 text-sm text-accent-600 dark:bg-accent-950/40 dark:text-accent-400">
 						<span className="flex-1">{uploadHint}</span>
 						<button
 							type="button"
@@ -1901,7 +1901,7 @@ function FileBrowser({
 									key={obj.key}
 									className={`group border-b border-zinc-100 transition-colors dark:border-zinc-800/60 ${
 										cursor === index
-											? "bg-blue-50 ring-1 ring-inset ring-blue-300 dark:bg-blue-950/40 dark:ring-blue-800"
+											? "bg-accent-50 ring-1 ring-inset ring-accent-300 dark:bg-accent-950/40 dark:ring-accent-700"
 											: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
 									}`}
 									onContextMenu={(event) => {
@@ -2013,7 +2013,7 @@ function FileBrowser({
 								role="button"
 								tabIndex={0}
 								className={`card group relative flex cursor-pointer flex-col items-center gap-2 p-3 text-center transition-shadow hover:shadow-md ${
-									cursor === index ? "ring-2 ring-blue-500" : ""
+									cursor === index ? "ring-2 ring-accent-500" : ""
 								}`}
 								onClick={() => openObject(obj)}
 								onKeyDown={(event) => {
@@ -2027,7 +2027,7 @@ function FileBrowser({
 								<span
 									className={`absolute left-2 top-2 h-3.5 w-3.5 rounded border accent-blue-600 ${
 										selectedKeys.has(obj.key)
-											? "border-blue-600 bg-blue-600"
+											? "border-accent-600 bg-accent-600"
 											: "border-zinc-300 bg-white/80 opacity-0 group-hover:opacity-100 dark:border-zinc-600 dark:bg-zinc-800"
 									}`}
 									onClick={(event) => {
@@ -2515,7 +2515,7 @@ function FolderTreeItem({
 			<div
 				className={`group flex items-center gap-0.5 rounded-lg pr-1 transition-colors ${
 					selected
-						? "bg-blue-50 text-blue-700 ring-1 ring-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:ring-blue-900"
+						? "bg-accent-50 text-accent-700 ring-1 ring-accent-200 dark:bg-accent-950/50 dark:text-accent-300 dark:ring-accent-900"
 						: "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
 				}`}
 				style={{ paddingLeft: `${depth * 14 + 6}px` }}
@@ -2586,7 +2586,7 @@ function FolderTreeItem({
 						)}
 						<button
 							type="button"
-							className="rounded p-1 text-zinc-400 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950/40"
+							className="rounded p-1 text-zinc-400 hover:bg-accent-50 hover:text-accent-600 dark:hover:bg-accent-950/40"
 							title="编辑目录（改名 / 公开 / 访客上传 / 成员桶）"
 							onClick={() => onEdit(node)}
 						>
@@ -2794,7 +2794,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 							</p>
 						</div>
 						{isAdmin && (
-							<span className="badge shrink-0 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+							<span className="badge shrink-0 bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400">
 								管理员
 							</span>
 						)}
@@ -2948,7 +2948,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 									{user.displayName || user.username}
 								</span>
 								{user.role === "admin" && (
-									<ShieldIcon className="h-3.5 w-3.5 shrink-0 text-blue-600" />
+									<ShieldIcon className="h-3.5 w-3.5 shrink-0 text-accent-600" />
 								)}
 							</button>
 

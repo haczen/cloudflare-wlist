@@ -875,7 +875,7 @@ export default function Live2DHome({
 								<div
 									className={`max-w-[85%] rounded-2xl px-2.5 py-1.5 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap ${
 										m.role === "user"
-											? "rounded-br-sm bg-blue-500 text-white"
+											? "rounded-br-sm bg-accent-500 text-white"
 											: "rounded-bl-sm bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"
 									}`}
 								>

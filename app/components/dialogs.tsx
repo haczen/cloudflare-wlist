@@ -287,7 +287,7 @@ export function ProfileDialog({
 						<div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
 							{user.username}
 							{user.role === "admin" && (
-								<span className="badge ml-1.5 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+								<span className="badge ml-1.5 bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400">
 									管理员
 								</span>
 							)}
@@ -857,7 +857,7 @@ export function StatsDialog({
 											</span>
 											<div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
 												<div
-													className="h-full rounded-full bg-blue-500"
+													className="h-full rounded-full bg-accent-500"
 													style={{ width: `${percent}%` }}
 												/>
 											</div>

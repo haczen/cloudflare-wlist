@@ -479,7 +479,7 @@ function SheetPreview({ url, fileName }: { url: string; fileName: string }) {
 							onClick={() => setActive(index)}
 							className={`rounded-md px-2.5 py-1 text-xs font-medium ${
 								index === active
-									? "bg-blue-600 text-white"
+									? "bg-accent-600 text-white"
 									: "bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
 							}`}
 						>
@@ -775,7 +775,7 @@ function ZipPreview({ url, size }: { url: string; size?: number }) {
 								<span className="text-xs text-zinc-500">
 									{isOpen ? "▾" : "▸"}
 								</span>
-								<span className="font-medium text-blue-600 dark:text-blue-400">
+								<span className="font-medium text-accent-600 dark:text-accent-400">
 									{dirName}
 								</span>
 							</button>

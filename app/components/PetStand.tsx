@@ -126,8 +126,13 @@ export default function PetStand({
 		if (!back) return;
 		const setup = (c: HTMLCanvasElement | null) => {
 			if (!c) return null;
-			c.width = Math.round(width * dpr);
-			c.height = Math.round(height * dpr);
+			// 尺寸没变就别重置画布（重置会清屏一帧 = 切主题时的闪跳）
+			const w = Math.round(width * dpr);
+			const h = Math.round(height * dpr);
+			if (c.width !== w || c.height !== h) {
+				c.width = w;
+				c.height = h;
+			}
 			const ctx = c.getContext("2d");
 			if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 			return ctx;
