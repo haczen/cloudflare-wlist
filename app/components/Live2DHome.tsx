@@ -173,7 +173,9 @@ export default function Live2DHome({
 		const onMove = (ev: PointerEvent) => {
 			const dx = startX - ev.clientX;
 			const dy = startY - ev.clientY;
-			if (Math.abs(dx) + Math.abs(dy) > 6) dragMovedRef.current = true;
+			// 拖拽判定阈值：14px（原 6px 太敏感——真实点击时鼠标抖动常达 7-15px，
+			// 会把每次"点击"误判成微型拖拽，助手被一点点挪走=「点几下人跑了」）
+			if (Math.abs(dx) + Math.abs(dy) > 14) dragMovedRef.current = true;
 			if (!dragMovedRef.current) return;
 			const r = Math.min(
 				Math.max(4, startR + dx),
