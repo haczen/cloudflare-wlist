@@ -133,6 +133,8 @@ export default function Live2DHome({
 	const [petPos, setPetPos] = useState<{ r: number; b: number } | null>(null);
 	const dragMovedRef = useRef(false); // 拖过就不再当点击处理
 	const lastTapRef = useRef(0); // 点击冷却时间戳
+	/** 渲染循环心跳：ticker 每帧刷新；看门狗据此检测停摆 */
+	const lastTickRef = useRef(0);
 	useEffect(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || "null");
@@ -353,14 +355,23 @@ export default function Live2DHome({
 	const playRandom = useCallback(() => {
 		const m = modelRef.current;
 		if (!m) return;
-		// 有动组（剔除 Idle——那是常驻待机）就随机挑一组，否则纯换表情
+		// 动作/表情启动若抛错（异常数据/竞态）不能让异常逃逸——
+		// 它会打断 pixi 渲染循环，画布从此空白=「人物消失」
 		const groups = playGroupsRef.current;
 		if (groups.length > 0) {
-			m.motion(groups[Math.floor(Math.random() * groups.length)]);
+			try {
+				m.motion(groups[Math.floor(Math.random() * groups.length)]);
+			} catch (err) {
+				console.warn("[守盘助手] 动作启动失败:", err);
+			}
 		}
 		const exprs = exprNamesRef.current;
 		if (exprs.length > 0) {
-			m.expression(exprs[Math.floor(Math.random() * exprs.length)]);
+			try {
+				m.expression(exprs[Math.floor(Math.random() * exprs.length)]);
+			} catch (err) {
+				console.warn("[守盘助手] 表情切换失败:", err);
+			}
 		}
 	}, []);
 
@@ -514,6 +525,11 @@ export default function Live2DHome({
 				// WebGL 像素回读不进全页截图，转场不掉帧
 				canvas.className = "petstand-canvas";
 				stageRef.current.appendChild(canvas);
+				// 渲染心跳：看门狗据此判断循环是否停摆
+				lastTickRef.current = performance.now();
+				app.ticker.add(() => {
+					lastTickRef.current = performance.now();
+				});
 				// WebGL 上下文丢失（GPU 驱动回收/负载高时偶发）→ 画布变空白像「消失」；
 				// 阻止默认丢渲染，恢复事件里强制重载模型
 				canvas.addEventListener(
@@ -602,6 +618,21 @@ export default function Live2DHome({
 			modelRef.current = null;
 		};
 	}, [modelKey, reloadNonce]);
+
+	// 渲染看门狗：ticker 心跳停超 3s（异常打断了渲染循环 = 人物消失的已知病理）→
+	// 自动重载模型自愈；页面在后台时 rAF 本来就停，跳过
+	useEffect(() => {
+		if (mode !== "live2d") return;
+		const id = window.setInterval(() => {
+			if (document.hidden) return;
+			if (!appRef.current || !lastTickRef.current) return;
+			if (performance.now() - lastTickRef.current > 3000) {
+				console.warn("[守盘助手] 渲染循环停摆，自动重载模型");
+				setReloadNonce((n) => n + 1);
+			}
+		}, 2000);
+		return () => window.clearInterval(id);
+	}, [mode]);
 
 	// 灵动时钟：动作与说话分开计时——
 	// 动作（换表情/小舞蹈）每 10~22s 一次；说话每 14~28s 冒一句（不点击也会说）
