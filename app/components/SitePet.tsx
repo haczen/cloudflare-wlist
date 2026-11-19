@@ -101,7 +101,92 @@ const STYLE = `
 }
 `;
 
+// 面板几何（拖拽/缩放），与主面板共用同一个 localStorage 键
+const PANEL_KEY = "wlist-pet-panel";
+
 export default function SitePet({ busy }: { busy?: boolean }) {
+	const [panel, setPanel] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+	const panelRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(PANEL_KEY) || "null");
+			if (saved && saved.x >= 0 && saved.w >= 240) setPanel(saved);
+		} catch {
+			/* 损坏忽略 */
+		}
+	}, []);
+	const savePanel = (p: { x: number; y: number; w: number; h: number } | null) => {
+		setPanel(p);
+		try {
+			if (p) localStorage.setItem(PANEL_KEY, JSON.stringify(p));
+		} catch {
+			/* 隐私模式忽略 */
+		}
+	};
+	const startPanelDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		if ((e.target as HTMLElement).closest("button")) return;
+		const header = e.currentTarget;
+		const panelEl = panelRef.current;
+		if (!panelEl) return;
+		const rect = panelEl.getBoundingClientRect();
+		const fixed = panel ?? { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+		const startX = e.clientX;
+		const startY = e.clientY;
+		header.setPointerCapture(e.pointerId);
+		const onMove = (ev: PointerEvent) => {
+			savePanel({
+				...fixed,
+				x: Math.min(Math.max(4, fixed.x + (ev.clientX - startX)), window.innerWidth - fixed.w - 4),
+				y: Math.min(Math.max(4, fixed.y + (ev.clientY - startY)), window.innerHeight - 60),
+			});
+		};
+		const onUp = () => {
+			header.removeEventListener("pointermove", onMove);
+			header.removeEventListener("pointerup", onUp);
+		};
+		header.addEventListener("pointermove", onMove);
+		header.addEventListener("pointerup", onUp);
+	};
+	const startPanelResize = (e: React.PointerEvent<HTMLDivElement>, dir: string) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		const grip = e.currentTarget;
+		const panelEl = panelRef.current;
+		if (!panelEl) return;
+		const rect = panelEl.getBoundingClientRect();
+		const fixed = panel ?? { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+		const startX = e.clientX;
+		const startY = e.clientY;
+		grip.setPointerCapture(e.pointerId);
+		const onMove = (ev: PointerEvent) => {
+			const dx = ev.clientX - startX;
+			const dy = ev.clientY - startY;
+			const next = { ...fixed };
+			if (dir.includes("w")) {
+				next.w = Math.min(Math.max(240, fixed.w - dx), Math.min(520, window.innerWidth - 40));
+				next.x = Math.min(Math.max(4, fixed.x + (fixed.w - next.w)), window.innerWidth - next.w - 4);
+			}
+			if (dir.includes("e")) {
+				next.w = Math.min(Math.max(240, fixed.w + dx), Math.min(520, window.innerWidth - fixed.x - 4));
+			}
+			if (dir.includes("n")) {
+				next.h = Math.min(Math.max(220, fixed.h - dy), Math.min(560, window.innerHeight - 40));
+				next.y = Math.min(Math.max(4, fixed.y + (fixed.h - next.h)), window.innerHeight - next.h - 4);
+			}
+			if (dir.includes("s")) {
+				next.h = Math.min(Math.max(220, fixed.h + dy), Math.min(560, window.innerHeight - fixed.y - 4));
+			}
+			savePanel(next);
+		};
+		const onUp = () => {
+			grip.removeEventListener("pointermove", onMove);
+			grip.removeEventListener("pointerup", onUp);
+		};
+		grip.addEventListener("pointermove", onMove);
+		grip.addEventListener("pointerup", onUp);
+	};
+
 	const [phrase, setPhrase] = useState<string | null>(null);
 	const [hopKey, setHopKey] = useState(0);
 	const timerRef = useRef<number | undefined>(undefined);
@@ -156,9 +241,17 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 
 			{/* 对话面板（接上 AI 后点小猫打开） */}
 			{chatOpen && (
-				<div className="sitepet-panel-in absolute bottom-full right-0 mb-3 flex w-[17.5rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 sm:w-72">
+				<div
+					ref={panelRef}
+					className={panel ? "sitepet-panel-in fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900" : "sitepet-panel-in absolute bottom-full right-0 mb-3 flex w-[17.5rem] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 sm:w-72"}
+					style={panel ? { left: panel.x, top: panel.y, width: panel.w, height: panel.h } : undefined}
+				>
 					{/* 头部 */}
-					<div className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-800/60">
+					<div
+						className="flex cursor-grab items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2 active:cursor-grabbing dark:border-zinc-800 dark:bg-zinc-800/60"
+						onPointerDown={startPanelDrag}
+						title="按住拖动窗口位置"
+					>
 						<div className="flex items-center gap-1.5">
 							<span className="text-sm" aria-hidden>
 								🐱
@@ -203,6 +296,15 @@ export default function SitePet({ busy }: { busy?: boolean }) {
 						</div>
 					</div>
 
+					{/* 全向缩放把手 */}
+					<div className="absolute bottom-2 left-0 top-9 z-10 w-1.5 cursor-ew-resize" onPointerDown={(e) => startPanelResize(e, "w")} />
+					<div className="absolute bottom-2 right-0 top-9 z-10 w-1.5 cursor-ew-resize" onPointerDown={(e) => startPanelResize(e, "e")} />
+					<div className="absolute inset-x-2 bottom-0 z-10 h-1.5 cursor-ns-resize" onPointerDown={(e) => startPanelResize(e, "s")} />
+					<div className="absolute inset-x-2 top-8 z-10 h-1.5 cursor-ns-resize" onPointerDown={(e) => startPanelResize(e, "n")} />
+					<div className="absolute bottom-0 left-0 z-20 h-4 w-4 cursor-nesw-resize" onPointerDown={(e) => startPanelResize(e, "sw")} />
+					<div className="absolute bottom-0 right-0 z-20 h-4 w-4 cursor-nwse-resize" onPointerDown={(e) => startPanelResize(e, "se")} />
+					<div className="absolute left-0 top-8 z-20 h-4 w-4 cursor-nwse-resize" onPointerDown={(e) => startPanelResize(e, "nw")} />
+					<div className="absolute right-0 top-8 z-20 h-4 w-4 cursor-nesw-resize" onPointerDown={(e) => startPanelResize(e, "ne")} />
 					{/* 消息列表 */}
 					<div ref={listRef} className="flex max-h-64 min-h-[5.5rem] flex-col gap-1.5 overflow-y-auto p-2.5">
 						{messages.length === 0 && !waiting && (

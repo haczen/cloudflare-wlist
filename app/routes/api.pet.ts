@@ -38,20 +38,23 @@ interface UserPetConfig {
 	siteModel?: string;
 }
 
-// ---------- 每 IP 频控（模块内存；best-effort，个人站足够） ----------
+// ---------- 突发限流（模块内存；best-effort，个人站足够） ----------
+// 按身份计数（登录用户=账号，游客=IP）+ 管理员豁免——原先按纯 IP 计数，
+// 一号管理员聊满后同网络的其他用户（含别的管理员）全被连坐 429=「只有我能聊」
 
 const chatHits = new Map<string, { n: number; reset: number }>();
 const CHAT_LIMIT = 15;
 const CHAT_WINDOW_MS = 10 * 60_000;
 
-function allowChat(ip: string): boolean {
+function allowChat(identity: string, isAdmin: boolean): boolean {
+	if (isAdmin) return true;
 	const now = Date.now();
-	const hit = chatHits.get(ip);
+	const hit = chatHits.get(identity);
 	if (!hit || now > hit.reset) {
 		if (chatHits.size > 500) {
 			for (const [k, v] of chatHits) if (now > v.reset) chatHits.delete(k);
 		}
-		chatHits.set(ip, { n: 1, reset: now + CHAT_WINDOW_MS });
+		chatHits.set(identity, { n: 1, reset: now + CHAT_WINDOW_MS });
 		return true;
 	}
 	if (hit.n >= CHAT_LIMIT) return false;
@@ -450,7 +453,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 				{ status: 401 }
 			);
 		}
-		if (!allowChat(meta.ip || "unknown")) {
+		if (!allowChat(chatIdentity(user, meta.ip), isAdmin)) {
 			return Response.json(
 				{ error: "累了喵，休息一会儿再聊~（10 分钟内次数用完）" },
 				{ status: 429 }
