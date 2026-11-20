@@ -2,13 +2,16 @@
 
 # WList — 跑在 Cloudflare 上的多网盘聚合存储中心
 
+<img src="public/favicon.svg" width="86" align="right" alt="WList Logo：毛茸茸小狗坐在云上听音乐" />
+
 [![CI](https://github.com/haczen/cloudflare-wlist/actions/workflows/ci.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/actions/workflows/ci.yml)
 [![Deploy](https://github.com/haczen/cloudflare-wlist/actions/workflows/deploy.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/actions/workflows/deploy.yml)
 [![Release](https://github.com/haczen/cloudflare-wlist/actions/workflows/release.yml/badge.svg)](https://github.com/haczen/cloudflare-wlist/releases)
+[![Latest Release](https://img.shields.io/github/v/release/haczen/cloudflare-wlist?display_name=tag&sort=semver)](https://github.com/haczen/cloudflare-wlist/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F6821f?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 
-一个开源、自托管的私有云盘门户：把散落在各家对象存储和网盘里的文件，聚合成**一棵统一的目录树**，配上用户体系、权限控制、在线预览、直链分享、跨桶聚合上传、免登录传输盘和 **AI 守盘助手**。全部运行在 Cloudflare Workers 免费额度内，**无需服务器**。
+一个开源、自托管的私有云盘门户：把散落在各家对象存储和网盘里的文件，聚合成**一棵统一的目录树**，配上用户体系、权限控制、全类型在线预览、直链分享、跨桶聚合上传、免登录传输盘和 **AI 守盘助手**。全部运行在 Cloudflare Workers 免费额度内，**无需服务器**。
 
 ```
  ┌────────────────────────── WList ──────────────────────────┐
@@ -26,9 +29,10 @@
 ## 目录
 
 - [特色亮点](#特色亮点) · [特性](#特性)
-- [快速部署（约 5 分钟）](#快速部署约-5-分钟) · [可选集成](#github-登录可选)（GitHub 登录 / Telegram / S3 配置）
+- [快速部署（约 5 分钟）](#快速部署约-5-分钟) · [持续部署](#持续部署可选) · [可选集成](#github-登录可选)（GitHub 登录 / Telegram / S3 配置）
 - [守盘助手（AI 看板娘）](#守盘助手ai-看板娘)
-- [使用模型](#使用模型) · [技术栈](#技术栈) · [Star History](#star-history)
+- [使用模型](#使用模型) · [常见问题](#常见问题-faq) · [技术栈](#技术栈)
+- [更新日志](#更新日志) · [Star History](#star-history)
 
 ## 特色亮点
 
@@ -37,8 +41,9 @@
 - **传输盘 = 临时文件中转站**：不登录、拖进去、拿链接、7 天自动清理 —— 跨设备传大文件的零成本方案
 - **Telegram 也可以是你的云盘**：Bot 收文件转存、上传完成通知、TG 收藏夹当聚合盘成员
 - **桶对用户完全隐形**：授权的最小单位是「虚拟目录」，而不是某个存储后端
-- **守盘助手**：右下角的 Live2D 看板娘（5 款官方形象任选）会眨眼、跳舞、视线跟着你的鼠标走；接入任意 OpenAI 兼容模型后全站可对话，用户还能接入自己的 key 无限畅聊
-- 三套主题（白 / 黑 / 暖）圆框转场切换、欢迎引导与站点公告可关可改 —— 开箱即是成品站
+- **全类型在线预览**：点开任何文件都进预览——未知扩展名自动做内容嗅探（文本直接渲染、二进制给下载引导）；ZIP 只拉尾部目录秒开；传输盘视频支持拖进度条（HTTP Range）
+- **守盘助手**：右下角的 Live2D 看板娘（5 款官方形象任选）会眨眼、自己挑动作玩（跳舞 / 摇头 / 被捏脸…外加程序化小跳/摇摆/弹跳）、视线全程跟随鼠标；接入任意 OpenAI 兼容模型后可对话，支持**用户接入自己的 Key 无限畅聊**
+- 三套主题（白 / 黑 / 暖）**圆形扩散转场**切换、全站色彩统一走主题令牌、站点 Logo（坐云听歌的小狗）—— 开箱即是成品站
 
 ## 特性
 
@@ -56,7 +61,7 @@
 
 **聚合盘 —— 大文件跨桶切片**（单文件大小不再受限于任何一块盘）
 - 上传时自动切片、轮询平分到全部成员桶；分片藏在 `.wlistpool/` 隐藏子树，正常浏览不可见
-- 下载时 Worker 顺序拉取分片拼回完整原件，对用户就是普通文件
+- 下载时 Worker 顺序拉取分片拼回完整原件，对用户就是普通文件；**支持 HTTP Range**（传输盘视频可拖进度条）
 - 分片大小自适应（默认 256MB，保证单文件 ≤40 片 —— Workers 免费版单请求 50 子请求上限）
 - 每片走预签名直传（multipart），失败自动回退代理转发；上传中断刷新页面可续传
 - 聚合盘根目录可直接在线新建文本文件（≤2MB 服务端直存，编辑器保存即入盘）
@@ -84,10 +89,10 @@
 - 个人资料：昵称、个性签名、头像、自助改密
 - 管理面板：用户增删、禁用、角色、目录授权，全量审计日志
 
-**文件操作**
+**文件操作与预览**
 - 重命名、移动（虚拟目录树视角）、复制直链、批量删除 / 下载、离线下载（URL 转存）
 - 在线新建 / 编辑文本文件（Markdown、代码、JSON…）
-- 预览：图片（网格缩略图）、视频（时长）、音频、PDF、Markdown、代码高亮、Office、ZIP 目录
+- 预览全家桶：图片（网格缩略图）、视频（时长+拖进度）、音频、PDF、Markdown、代码高亮、Office、ZIP 目录（只拉尾部秒开）、**未知类型内容嗅探**（前 64KB 判定文本/二进制）
 - 下载 / 缩略图 / 媒体预览全部走**签名直链**（客户端直连存储源站，不经 Worker 中转流量）
 
 **分享**
@@ -107,11 +112,13 @@ npm run deploy
 
 部署成功后绑定你自己的域名（或先用 `*.workers.dev`），打开站点用 `wrangler.jsonc` 里设置的管理员账号登录，添加第一个存储桶，创建第一个目录 —— 完事。
 
-> 首次登录会用环境变量里的管理员账号自动建号；之后可在「个人资料」里改密码，或在管理面板创建更多用户。
+> 首次登录会用环境变量里的管理员账号自动建号；数据表在首次访问时自动建（`migrations/schema.sql` 仅作参考，无需手动执行）。之后可在「个人资料」里改密码，或在管理面板创建更多用户。
 
 ### 持续部署（可选）
 
 fork 后在仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `ADMIN_PASSWORD`，变量 `DATABASE_ID`，push 到 main 即自动部署（`.github/workflows/deploy.yml`）。`wrangler.jsonc` 已 gitignore，CI 从 example 模板生成。
+
+**CI / Release**：所有分支 push / PR 自动跑 typecheck + build（`ci.yml`）；打 `v*` 标签（如 `git tag v1.3.0 && git push --tags`）自动构建并发布 GitHub Release，附自动生成的完整变更说明（`release.yml`）。
 
 ### GitHub 登录(可选)
 
@@ -147,41 +154,59 @@ fork 后在仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLA
 
 ## 使用模型
 
-| 角色 | 看到什么 |
-|---|---|
-| 访客 | 所有标记「公开」的目录；传输盘还能免登录上传 |
-| 普通用户 | 公开目录 ∪ 管理员分配给 TA 的目录（每个目录可独立开 浏览/下载/上传）；传输盘可删/重命名自己上传的文件 |
-| 管理员 | 全部目录 + 存储后端（桶）+ 聚合/TG 专属选项 + 管理面板 |
+| 角色 | 看到什么 | 能和她聊天吗 |
+|---|---|---|
+| 访客 | 所有标记「公开」的目录；传输盘还能免登录上传 | ❌ 登录后才可以 |
+| 普通用户 | 公开目录 ∪ 管理员分配给 TA 的目录（每个目录可独立开 浏览/下载/上传）；传输盘可删/重命名自己上传的文件 | ✓ 站内模型共 5 次；⚙ 里接入自己的模型即无限 |
+| 管理员 | 全部目录 + 存储后端（桶）+ 聚合/TG 专属选项 + 管理面板 | ✓ 无限 |
 
 权限判定只有一条规则：**目录是唯一的大门** —— 桶本身的配置不直接产生任何访问授权，所以「把某个目录公开 / 某个目录只给某人」都是一键操作，立即生效。
 
 ## 守盘助手（AI 看板娘）
 
-右下角常驻一只 Live2D 看板娘：会眨眼、自己挑动作玩（跳舞 / 摇头 / 被捏脸…）、视线跟随你的鼠标，点击她有反应。**接入任意 OpenAI 兼容模型后，全站访客都能和她对话**。
+右下角常驻一只 Live2D 看板娘：会眨眼、待机动作自动播、**每 10~22 秒自己挑个动作玩**（跳舞 / 摇头 / 被捏脸，外加程序化的跳跃 / 摇摆 / Q 弹）、**每 14~28 秒自己说一句话**、视线全程跟随鼠标；点她 = 动作 + 表情 + 台词（还有连招小惊喜），按住可以把她拖到屏幕任意位置。
 
-**管理员接入**（管理面板 → 守盘助手）：
+**管理员接入**（管理面板 → 守盘助手 → AI 对话）：
 
 | 字段 | 说明 |
 |---|---|
 | API Base URL | OpenAI 兼容端点（DeepSeek / GLM / Kimi / OpenAI / 自建 Ollama / 各类中转），漏了 `/v1` 会自动补试 |
-| 模型名 | 点「可用模型」直接拉取清单，点选即切 |
+| 模型名 | 点「可用模型」直接拉取清单，**点模型名即切换**（当前模型打勾） |
 | API Key | 只存服务端 D1，浏览器全程接触不到 |
 | 人设提示词 | 可改（只有管理员可见，普通用户界面不出现） |
 | 测试连接 | 真发一条消息验证配置 |
-| 形象 | 小滴 / 山药猫 / 小黑狗 / 小饭团 / 桃濑日和 五选一，点选即存 |
+| 形象 | 小滴 / 山药猫 / 小黑狗 / 小饭团（默认）/ 桃濑日和 五选一，点选即存 |
 
 **对话规则**：
 
-- 管理员、以及**接入了自己模型**的用户：无限畅聊
-- 其他用户：站内模型共 **5 次**；聊天窗口 ⚙ 里填自己的 Base URL / Key（「拉清单」自动填模型名）→ 保存即无限，key 只存服务端
-- 聊天窗口可拖动位置、四条边和四角自由缩放，右下角看板娘也可以按住拖到任意位置
+- 游客不能聊天（登录是门槛）；管理员无限畅聊
+- 普通用户用站内模型共 **5 次**（聊天框下方实时显示剩余次数）
+- 聊天窗口 ⚙ 里三步接入**自己的模型**（① 填 API 地址和 Key → ② 「🔍 测试并获取模型列表」验证连通 → ③ 点选模型保存）→ **无限畅聊**，Key 只存服务端
+- 聊天窗口可拖动位置（标题栏）、**四条边 + 四个角自由缩放**（往哪拉往哪长），位置尺寸自动记忆
+
+**上游兼容性**（自动处理，无需配置）：Base URL 漏 `/v1` 自动补试；上游停用 `/chat/completions`（如部分 Codex 类中转）自动降级 `/responses`（Responses API）；网络抖动自动重试。
 
 > 模型形象来自 [Live2D](https://www.live2d.com/) 官方免费素材（见文末致谢）。
 
+## 常见问题 FAQ
+
+**Q：守盘助手聊天报「上游网络不通 / 上游返回 4xx」？**
+看具体错误：`401` = Key 无效；`404` = 模型名或路径不对（确认以 `/v1` 结尾、模型 id 与中转一致，点「可用模型」看真名）；`403 client_not_allowed` = 该中转仅允许编程客户端（Codex / Claude Code 等），换个通用中转或官方 API；一直超时 = 上游对你所在地区/出口不稳定。管理面板「测试连接」可以一键分型诊断。
+
+**Q：`*.workers.dev` 打不开？**
+该域名在部分地区被污染，需代理访问；建议绑定自己的自定义域名。
+
+**Q：聚合盘上传到一半断了怎么办？**
+什么都不用做，刷新页面继续——分片进度持久化在浏览器里，已传的分片不会重传。
+
+**Q：怎么升级？**
+`git pull && npm install && npm run deploy`（或 CI 部署的直接 push）。数据表变更随首次访问自动迁移，D1 数据不受影响。
+
 ## 技术栈
 
-- [React Router v7](https://reactrouter.com/)（SSR + SPA 混合）+ Tailwind CSS v4
-- Cloudflare Workers + D1（SQLite）+ Workers 静态资源 + Cron Trigger（7 天保留清理）
+- [React Router v7](https://reactrouter.com/)（SSR + SPA 混合）+ Tailwind CSS v4（三主题 = CSS 色板令牌覆写 + View Transitions 圆形转场）
+- Cloudflare Workers + D1（SQLite）+ Workers 静态资源（`public/_headers` 缓存策略）+ Cron Trigger（7 天保留清理）
+- 守盘助手：pixi.js + pixi-live2d-display（Cubism 2/4 双代按需加载）+ Canvas 2D 手绘底座（日夜调色板逐帧补间）
 - 各存储后端为独立客户端模块（`app/lib/*-client.ts`），统一实现 `listObjects / getObject / putObject / multipart...` 接口，新增一种存储只需实现一个客户端并在工厂注册
 
 ```
@@ -195,11 +220,20 @@ app/
 │   ├── folders.ts          # 虚拟目录树 + 权限解析
 │   ├── pool.ts             # 聚合盘：分片规划 / 清单 / 7 天保留清理
 │   ├── upload-manager.ts   # 上传引擎：并发 / 续传 / 刷新恢复
+│   ├── pet.ts              # 守盘助手配置层（形象 / AI / BYOK）
 │   ├── users.ts / auth.ts / password.ts   # 用户与会话
 │   └── shares.ts / audit.ts
 ├── routes/                 # 页面与 API（home / share / api.* / api.telegram）
-└── components/             # 预览器、对话框、管理面板、上传任务面板
+└── components/
+    ├── Live2DHome.tsx      # 守盘助手（模型加载 / 程序化动作 / 聊天窗）
+    ├── PetStand.tsx        # Canvas 底座（坐垫 / 宠物小窝，日夜补间）
+    ├── FilePreview.tsx     # 全类型预览（嗅探 / ZIP 快开 / Range）
+    └── ...                 # 对话框、管理面板、上传任务面板
 ```
+
+## 更新日志
+
+见 [Releases](https://github.com/haczen/cloudflare-wlist/releases) —— 每个版本自动生成完整变更说明。
 
 ## Star History
 

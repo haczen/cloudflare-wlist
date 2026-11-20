@@ -1,9 +1,12 @@
 name: Release
 
-# 打 tag（v*）即发布：构建校验 + 创建 GitHub Release（自动生成变更说明）
+# 两种触发：
+# 1) 打 tag（v*）即发布 —— 推荐的正式流程
+# 2) 手动 Run workflow：在 Actions 页面点按钮也能发一版（读 package.json 版本号打 tag）
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -28,17 +33,29 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            V=$(node -p "require('./package.json').version")
+            echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           body: |
-            ## WList ${{ github.ref_name }}
+            ## WList ${{ steps.ver.outputs.tag }}
 
-            Cloudflare Workers 上的多网盘聚合存储中心。
+            Cloudflare Workers 上的多网盘聚合存储中心：多后端聚合、跨桶分片、免登录传输盘、AI 守盘助手。
 
-            ### 部署
-            见 [README](https://github.com/${{ github.repository }}#快速部署) —— fork 后配置 Secrets 即可，约 5 分钟。
+            ### 部署 / 升级
+            见 [README](https://github.com/${{ github.repository }}#快速部署约-5-分钟) —— fork 后配置 Secrets 即可；已部署的 `git pull && npm run deploy`（表结构自动迁移）。
 
             ### 完整变更
-            自动生成于下方。
+            以下由 GitHub 自动生成。
