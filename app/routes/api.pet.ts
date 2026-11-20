@@ -517,21 +517,43 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json({ error: "没有可回复的消息" }, { status: 400 });
 		}
 
-		const upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/chat/completions", {
+		const systemPrompt = cfg.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT;
+		let upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/chat/completions", {
 			method: "POST",
 			body: JSON.stringify({
 				model: cfg.model,
 				messages: [
-					{
-						role: "system",
-						content: cfg.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT,
-					},
+					{ role: "system", content: systemPrompt },
 					...history,
 				],
 				max_tokens: 480,
 				temperature: 0.8,
 			}),
 		});
+
+		// 部分中转（如 hub.oaifree.com 2026-11 起）停用了 /chat/completions，
+		// 要求改走 /responses（Responses API，Codex CLI 同款）——识别后自动切换
+		if (upstream && !upstream.ok && upstream.status === 400) {
+			const errText = await upstream.text().catch(() => "");
+			if (/chat_completions_disabled|\/responses/i.test(errText)) {
+				upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/responses", {
+					method: "POST",
+					body: JSON.stringify({
+						model: cfg.model,
+						instructions: systemPrompt,
+						input: history,
+						max_output_tokens: 480,
+					}),
+				});
+			} else {
+				// 还原给下面的统一错误处理（text 已消费，直接就地返回）
+				return Response.json(
+					{ error: `上游返回 400：${errText.slice(0, 300)}` },
+					{ status: 502 }
+				);
+			}
+		}
+
 		if (!upstream) {
 			return Response.json({ error: "上游网络不通（检查 Base URL / 模型名）" }, { status: 502 });
 		}
@@ -548,10 +570,26 @@ export async function action({ request, context }: Route.ActionArgs) {
 				{ status: 502 }
 			);
 		}
-		const data = (await upstream.json().catch(() => null)) as {
-			choices?: Array<{ message?: { content?: string } }>;
-		};
-		const reply = data?.choices?.[0]?.message?.content?.trim();
+		// 兼容两种应答：Chat Completions（choices[0].message.content）
+		// 与 Responses API（output[].content[].text / 顶层 output_text）
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const data = (await upstream.json().catch(() => null)) as any;
+		let reply: string | undefined;
+		if (data?.choices?.[0]?.message?.content) {
+			reply = String(data.choices[0].message.content).trim();
+		} else if (typeof data?.output_text === "string") {
+			reply = data.output_text.trim();
+		} else if (Array.isArray(data?.output)) {
+			const texts: string[] = [];
+			for (const item of data.output) {
+				if (Array.isArray(item?.content)) {
+					for (const c of item.content) {
+						if (typeof c?.text === "string") texts.push(c.text);
+					}
+				}
+			}
+			reply = texts.join("").trim();
+		}
 		if (!reply) {
 			return Response.json({ error: "上游没说话（回复为空）" }, { status: 502 });
 		}
