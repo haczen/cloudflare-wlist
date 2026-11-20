@@ -146,10 +146,10 @@ async function callUpstream(
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${apiKey}`,
-				// Worker 的 fetch 默认不带 UA，部分挂在 CF 盾后的中转按 UA 拦
-				// POST（本地工具都带 UA 所以能通）——补一个标准浏览器 UA
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+				// Worker 的 fetch 默认不带 UA；且本站上游（hub.oaifree.com 类中转）
+				// 有客户端白名单（仅允许 Codex / Claude Code / Cursor 等编程客户端），
+				// 普通 UA 会被 403 client_not_allowed 拒——挂 Codex CLI 同款 UA 通过
+				"User-Agent": "codex_cli_rs/0.42.0",
 				...(init.headers || {}),
 			},
 			signal: AbortSignal.timeout(20_000),
