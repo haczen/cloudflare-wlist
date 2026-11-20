@@ -131,7 +131,9 @@ async function deleteUserPetConfig(
 		.run();
 }
 
-/** OpenAI 兼容端点兜底：Base URL 少 /v1 → 403/404 时自动补试一次 */
+/** OpenAI 兼容端点兜底：Base URL 少 /v1 → 403/404 时自动补试一次；
+ *  网络级失败（连接超时/被重置）重试一次——中转类上游对 CF Workers 的
+ *  POST 长连接偶发抽风，第二次连接往往就通了 */
 async function callUpstream(
 	baseUrl: string,
 	apiKey: string,
@@ -146,9 +148,14 @@ async function callUpstream(
 				Authorization: `Bearer ${apiKey}`,
 				...(init.headers || {}),
 			},
-			signal: AbortSignal.timeout(30_000),
+			signal: AbortSignal.timeout(20_000),
 		}).catch(() => null);
 	let res = await doFetch(baseUrl);
+	// 网络级失败 → 短暂等待后原址重试一次（换一个 worker 实例/连接池）
+	if (!res) {
+		await new Promise((r) => setTimeout(r, 800));
+		res = await doFetch(baseUrl);
+	}
 	if (
 		res &&
 		!res.ok &&
