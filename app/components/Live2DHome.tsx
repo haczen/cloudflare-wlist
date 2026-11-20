@@ -885,13 +885,17 @@ export default function Live2DHome({
 												</div>
 											)}
 										</div>
-										{/* 接入自己的模型 */}
+										{/* 接入自己的模型：分步向导式，字段带说明与示例 */}
 										<div className="rounded-xl border border-zinc-200 p-2.5 dark:border-zinc-700">
-											<p className="mb-1.5 font-semibold text-zinc-700 dark:text-zinc-200">
+											<p className="mb-0.5 font-semibold text-zinc-700 dark:text-zinc-200">
 												接入自己的模型{myMode === "own" ? "（当前使用 ∞）" : "（无限畅聊）"}
 											</p>
+											<p className="mb-2 text-[10.5px] leading-relaxed text-zinc-400">
+												三步：① 填 API 地址和密钥 → ② 点「测试并获取模型」验证连通 → ③ 保存。
+												Key 只存本站服务端，其他人看不到。
+											</p>
 											<form
-												className="flex flex-col gap-1.5"
+												className="flex flex-col gap-2"
 												onSubmit={async (e) => {
 													e.preventDefault();
 													setSettingsBusy(true);
@@ -914,77 +918,108 @@ export default function Live2DHome({
 													}
 												}}
 											>
-												<input
-													className="input !py-1 !text-[11.5px]"
-													placeholder="Base URL（如 https://api.deepseek.com/v1）"
-													value={ownForm.baseUrl}
-													onChange={(e) => setOwnForm((f) => ({ ...f, baseUrl: e.target.value }))}
-												/>
-												<input
-													className="input !py-1 !text-[11.5px]"
-													type="password"
-													placeholder={myMode === "own" ? "API Key（留空=沿用已保存的）" : "API Key（只存服务端，不外泄）"}
-													value={ownForm.apiKey}
-													onChange={(e) => setOwnForm((f) => ({ ...f, apiKey: e.target.value }))}
-												/>
-												<div className="flex gap-1.5">
+												<label className="block">
+													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
+														① API 地址（Base URL，一般以 /v1 结尾）
+													</span>
 													<input
-														className="input min-w-0 flex-1 !py-1 !text-[11.5px]"
-														placeholder="模型名（可点下方按钮拉清单）"
+														className="input !py-1 !text-[11.5px]"
+														placeholder="https://api.deepseek.com/v1"
+														value={ownForm.baseUrl}
+														onChange={(e) => setOwnForm((f) => ({ ...f, baseUrl: e.target.value }))}
+													/>
+												</label>
+												<label className="block">
+													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
+														② API Key（密钥，sk- 开头；已保存过可留空）
+													</span>
+													<input
+														className="input !py-1 !text-[11.5px]"
+														type="password"
+														placeholder="sk-…"
+														value={ownForm.apiKey}
+														onChange={(e) => setOwnForm((f) => ({ ...f, apiKey: e.target.value }))}
+													/>
+												</label>
+												<button
+													type="button"
+													className="btn-outline !py-1 !text-[11px]"
+													disabled={settingsBusy}
+													onClick={async () => {
+														setSettingsBusy(true);
+														setSettingsMsg("正在测试连通…");
+														try {
+															const r = await fetch("/api/pet?models=1", {
+																method: "POST",
+																headers: { "Content-Type": "application/json" },
+																body: JSON.stringify({ models: ownForm }),
+															});
+															const d = (await r.json().catch(() => ({}))) as {
+																models?: string[];
+																error?: string;
+															};
+															if (!r.ok || !d.models) {
+																throw new Error(
+																	d.error ||
+																		"连不通：检查地址是否以 /v1 结尾、Key 是否正确"
+																);
+															}
+															setOwnModels(d.models);
+															setSettingsMsg(
+																`✓ 连通成功！你的 Key 可用（${d.models.length} 个模型），点下面选一个`
+															);
+														} catch (err) {
+															setSettingsMsg(
+																"✗ " + (err instanceof Error ? err.message : "测试失败")
+															);
+														} finally {
+															setSettingsBusy(false);
+														}
+													}}
+												>
+													{settingsBusy ? "测试中…" : "🔍 测试并获取模型列表"}
+												</button>
+												{ownModels.length > 0 && (
+													<div>
+														<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
+															③ 选一个模型（点名字填入）
+														</span>
+														<div className="flex flex-wrap gap-1">
+															{ownModels.map((id) => (
+																<button
+																	key={id}
+																	type="button"
+																	className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
+																		ownForm.model === id
+																			? "border-accent-500 bg-accent-50 font-semibold text-accent-700 dark:bg-accent-950/40 dark:text-accent-300"
+																			: "border-zinc-200 text-zinc-600 hover:border-accent-300 dark:border-zinc-700 dark:text-zinc-300"
+																	}`}
+																	onClick={() => setOwnForm((f) => ({ ...f, model: id }))}
+																>
+																	{id}
+																</button>
+															))}
+														</div>
+													</div>
+												)}
+												<label className="block">
+													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
+														模型名（可手填，或点上面选）
+													</span>
+													<input
+														className="input !py-1 !text-[11.5px]"
+														placeholder="deepseek-chat"
 														value={ownForm.model}
 														onChange={(e) => setOwnForm((f) => ({ ...f, model: e.target.value }))}
 													/>
-													<button
-														type="button"
-														className="btn-outline shrink-0 !px-2 !py-1 !text-[11px]"
-														disabled={settingsBusy}
-														onClick={async () => {
-															setSettingsBusy(true);
-															setSettingsMsg(null);
-															try {
-																const r = await fetch("/api/pet?models=1", {
-																	method: "POST",
-																	headers: { "Content-Type": "application/json" },
-																	body: JSON.stringify({ models: ownForm }),
-																});
-																const d = (await r.json().catch(() => ({}))) as {
-																	models?: string[];
-																	error?: string;
-																};
-																if (!r.ok || !d.models) throw new Error(d.error || "拉取失败");
-																setOwnModels(d.models);
-																setSettingsMsg(`你的 key 可用（${d.models.length} 个模型），点下面的名字填入`);
-															} catch (err) {
-																setSettingsMsg(err instanceof Error ? err.message : "拉取失败");
-															} finally {
-																setSettingsBusy(false);
-															}
-														}}
-													>
-														拉清单
-													</button>
-												</div>
-												{ownModels.length > 0 && (
-													<div className="flex flex-wrap gap-1">
-														{ownModels.map((id) => (
-															<button
-																key={id}
-																type="button"
-																className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
-																	ownForm.model === id
-																		? "border-amber-500 bg-amber-50 font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-																		: "border-zinc-200 text-zinc-600 hover:border-amber-300 dark:border-zinc-700 dark:text-zinc-300"
-																}`}
-																onClick={() => setOwnForm((f) => ({ ...f, model: id }))}
-															>
-																{id}
-															</button>
-														))}
-													</div>
-												)}
+												</label>
 												<div className="flex gap-1.5">
-													<button type="submit" className="btn-primary flex-1 !py-1 !text-[11px]" disabled={settingsBusy}>
-														保存
+													<button
+														type="submit"
+														className="btn-primary flex-1 !py-1 !text-[11px]"
+														disabled={settingsBusy}
+													>
+														{settingsBusy ? "处理中…" : "保存并启用（无限畅聊）"}
 													</button>
 													{myMode === "own" && (
 														<button
