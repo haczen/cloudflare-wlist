@@ -19,6 +19,15 @@ import { requireAuth } from "~/lib/auth";
 import { initDatabase } from "~/lib/storage";
 import { getRequestMeta, logAudit } from "~/lib/audit";
 import {
+	buildChatAttempts,
+	candidateUrls,
+	shouldTryVersioned,
+	extractReply,
+	extractModelIds,
+	describeFailures,
+	type ChatTurn,
+} from "~/lib/ai-protocols";
+import {
 	DEFAULT_PET_SYSTEM_PROMPT,
 	PET_MODELS,
 	getPetModel,
@@ -146,9 +155,7 @@ async function callUpstream(
 	path: string,
 	init: RequestInit
 ): Promise<Response | null> {
-	const base = baseUrl.replace(/\/+$/, "");
-	const urls = [`${base}${path}`];
-	if (!/\/v\d+[a-z]*$/i.test(base)) urls.push(`${base}/v1${path}`);
+	const urls = candidateUrls(baseUrl, path);
 	const doFetch = (u: string) =>
 		fetch(u, {
 			...init,
@@ -171,10 +178,7 @@ async function callUpstream(
 			if (!res) return last; // 超时/断连很耗时，不再追加等待
 			last = res;
 			if (res.status >= 520) continue; // 源站异常：原地再试一次
-			if (
-				(res.status === 403 || res.status === 404 || res.status === 405) &&
-				u < urls.length - 1
-			) {
+			if (shouldTryVersioned(res.status) && u < urls.length - 1) {
 				break; // 这个地址不存在/不让进 → 换成带 /v1 的地址
 			}
 			return res;
@@ -183,92 +187,19 @@ async function callUpstream(
 	return last;
 }
 
-/** 从各家协议的应答里把回复文本抠出来（Chat / Responses / Messages / 旧 Completions 全兼容） */
-function extractReply(d: unknown): string {
-	if (!d || typeof d !== "object") return "";
-	const data = d as Record<string, any>;
-	const pick = (v: unknown): string => {
-		if (typeof v === "string") return v;
-		if (Array.isArray(v)) {
-			return v
-				.map((p) => (p && typeof p === "object" ? String((p as any).text ?? "") : ""))
-				.join("");
-		}
-		return "";
-	};
-	const choice = Array.isArray(data.choices) ? data.choices[0] : null;
-	if (choice) {
-		const c = pick(choice.message?.content) || pick(choice.text) || pick(choice.delta?.content);
-		if (c.trim()) return c.trim();
-	}
-	if (typeof data.output_text === "string" && data.output_text.trim()) {
-		return data.output_text.trim();
-	}
-	if (Array.isArray(data.output)) {
-		const c = data.output.map((item: any) => pick(item?.content)).join("");
-		if (c.trim()) return c.trim();
-	}
-	if (Array.isArray(data.content)) {
-		const c = pick(data.content);
-		if (c.trim()) return c.trim();
-	}
-	if (typeof data.completion === "string" && data.completion.trim()) {
-		return data.completion.trim();
-	}
-	return "";
-}
-
 /** 三种聊天协议依次尝试，直到某一条给出回复；全败则返回能看懂的原因 */
 async function callModel(
 	baseUrl: string,
 	apiKey: string,
 	model: string,
 	systemPrompt: string,
-	history: Array<{ role: "user" | "assistant"; content: string }>
+	history: ChatTurn[]
 ): Promise<{ reply: string; via: string } | { error: string }> {
-	const specs = [
-		{
-			via: "chat",
-			path: "/chat/completions",
-			headers: {} as Record<string, string>,
-			body: {
-				model,
-				messages: [{ role: "system", content: systemPrompt }, ...history],
-				max_tokens: 480,
-				temperature: 0.8,
-			},
-		},
-		{
-			via: "responses",
-			path: "/responses",
-			headers: {} as Record<string, string>,
-			body: {
-				model,
-				instructions: systemPrompt,
-				input: history,
-				max_output_tokens: 480,
-			},
-		},
-		{
-			via: "messages",
-			path: "/messages",
-			headers: {
-				"x-api-key": apiKey,
-				"anthropic-version": "2023-06-01",
-			} as Record<string, string>,
-			body: {
-				model,
-				system: systemPrompt,
-				messages: history,
-				max_tokens: 480,
-			},
-		},
-	];
 	const tries: Array<{ via: string; status: number; text?: string }> = [];
-	for (const spec of specs) {
+	for (const spec of buildChatAttempts(model, systemPrompt, history)) {
 		const res = await callUpstream(baseUrl, apiKey, spec.path, {
 			method: "POST",
-			headers: spec.headers,
+			headers: { ...spec.headers, "x-api-key": apiKey },
 			body: JSON.stringify(spec.body),
 		});
 		if (!res) {
@@ -287,41 +218,7 @@ async function callModel(
 		// Key 不对：换哪个端点都一样，不用再试
 		if (res.status === 401) break;
 	}
-	// 把尝试结果翻译成人话
-	const statuses = tries.map((t) => t.status);
-	const all52x = statuses.length > 0 && statuses.every((s) => s >= 520);
-	const allNet = statuses.every((s) => s === 0);
-	if (all52x) {
-		return {
-			error:
-				"上游拒绝了来自本站服务器的请求（520）。这个接口只接受 Codex / Claude Code 这类客户端从你自己的电脑直连，不接受网站服务器转发——换一个标准的 OpenAI 兼容接口即可",
-		};
-	}
-	if (allNet) {
-		return { error: "连不上上游（超时或被重置）：检查 Base URL 是否写对" };
-	}
-	if (tries.some((t) => t.status === 401)) {
-		return { error: "API Key 无效或已过期" };
-	}
-	const notAllowed = tries.find(
-		(t) => t.status === 403 && /not.?allowed|client|whitelist|编程客户端/i.test(t.text || "")
-	);
-	if (notAllowed) {
-		return {
-			error:
-				"该接口仅允许编程客户端（Codex / Claude Code 等）使用，不接受网站服务端调用——换一个标准 OpenAI 兼容接口即可",
-		};
-	}
-	if (tries.every((t) => t.status === 404)) {
-		return { error: "接口不存在：确认 Base URL（一般以 /v1 结尾）" };
-	}
-	return {
-		error:
-			"上游没给出回复：" +
-			tries
-				.map((t) => `${t.via} ${t.status === 0 ? "连不上" : t.status}${t.text ? `（${t.text.slice(0, 60)}）` : ""}`)
-				.join("；"),
-	};
+	return { error: describeFailures(tries, "server") };
 }
 
 async function listUpstreamModels(
@@ -343,8 +240,7 @@ async function pickFirstModel(
 			| { data?: Array<{ id?: string }> }
 			| Array<{ id?: string }>
 			| null;
-		const list = Array.isArray(data) ? data : data?.data ?? [];
-		const first = list.map((m) => m?.id).filter((id): id is string => typeof id === "string")[0];
+		const first = extractModelIds(data)[0];
 		return first || "";
 	} catch {
 		return "";
@@ -449,10 +345,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 			| { data?: Array<{ id?: string }> }
 			| Array<{ id?: string }>
 			| null;
-		const list = Array.isArray(data) ? data : data?.data ?? [];
-		const models = list
-			.map((m) => m?.id)
-			.filter((id): id is string => typeof id === "string");
+		const models = extractModelIds(data);
 		return Response.json({ models });
 	}
 
@@ -677,10 +570,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 				| { data?: Array<{ id?: string }> }
 				| Array<{ id?: string }>
 				| null;
-			const list = Array.isArray(data) ? data : data?.data ?? [];
-			const models = list
-				.map((m) => m?.id)
-				.filter((id): id is string => typeof id === "string");
+			const models = extractModelIds(data);
 			return Response.json({ models });
 		}
 

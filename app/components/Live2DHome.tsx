@@ -111,6 +111,7 @@ export default function Live2DHome({
 	modelKey,
 	aiConfigured,
 	dark,
+	userIdentity,
 }: {
 	busy?: boolean;
 	/** home loader 服务端下发的形象 key（切换后刷新页面生效） */
@@ -119,6 +120,8 @@ export default function Live2DHome({
 	aiConfigured: boolean;
 	/** 站点当前主题（底座 Canvas 按此补间日夜调色板） */
 	dark: boolean;
+	/** 登录身份（SPA 登录/登出后变化 → 聊天 hook 重新探测模式与剩余次数） */
+	userIdentity?: string | null;
 }) {
 	// loading = 加载中（整体隐藏，不露空底座）｜live2d = 已就位｜failed = 多次重试仍失败
 	const [mode, setMode] = useState<"loading" | "live2d" | "failed">("loading");
@@ -160,9 +163,23 @@ export default function Live2DHome({
 	const [chatInput, setChatInput] = useState("");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const { messages, waiting, chatError, sendChat, remaining, myMode, myModel, refresh, clearChat } =
-		usePetChat({
-			skipProbe: true, // configured/形象均来自 SSR props，不再发探测请求
+	const {
+		messages,
+		waiting,
+		chatError,
+		sendChat,
+		remaining,
+		myMode,
+		myModel,
+		ownDirect,
+		testOwn,
+		connectOwn,
+		disconnectOwn,
+		refresh,
+		clearChat,
+	} = usePetChat({
+			skipProbe: true, // configured/形象均来自 SSR props；模式与次数仍探测
+			reprobeKey: userIdentity, // 登录/登出后重新探测
 		});
 
 	// ---- 助手位置（可拖拽；记忆在 localStorage） ----
@@ -899,7 +916,11 @@ export default function Live2DHome({
 											<p className="mb-1 font-semibold text-zinc-700 dark:text-zinc-200">
 												站内模型{myMode === "site" ? "（当前使用）" : ""}
 											</p>
-											{siteModels.length === 0 ? (
+											{!aiConfigured ? (
+												<p className="text-zinc-400">
+													站内未配置——在下面接入自己的模型就能聊
+												</p>
+											) : siteModels.length === 0 ? (
 												<p className="text-zinc-400">加载中…（再点一次 ⚙ 刷新）</p>
 											) : (
 												<div className="flex flex-wrap gap-1">
@@ -940,14 +961,14 @@ export default function Live2DHome({
 												</div>
 											)}
 										</div>
-										{/* 接入自己的模型：分步向导式，字段带说明与示例 */}
+										{/* 接入自己的模型：只要「API 地址 + Key」对就能用——请求由浏览器直连用户自己的接口 */}
 										<div className="rounded-xl border border-zinc-200 p-2.5 dark:border-zinc-700">
 											<p className="mb-0.5 font-semibold text-zinc-700 dark:text-zinc-200">
-												接入自己的模型{myMode === "own" ? "（当前使用 ∞）" : "（无限畅聊）"}
+												接入自己的模型{myMode === "own" ? "（当前使用 · 无限畅聊）" : ""}
 											</p>
 											<p className="mb-2 text-[10.5px] leading-relaxed text-zinc-400">
-												三步：① 填 API 地址和密钥 → ② 点「测试并获取模型」验证连通 → ③ 保存。
-												Key 只存本站服务端，其他人看不到。
+												填 API 地址和 Key 就行，模型从清单里选。请求由你的浏览器直接发到你的接口
+												（和本地工具同一条路，不限次数）；Key 只存在你这个浏览器里。
 											</p>
 											<form
 												className="flex flex-col gap-2"
@@ -956,18 +977,22 @@ export default function Live2DHome({
 													setSettingsBusy(true);
 													setSettingsMsg(null);
 													try {
-														const r = await fetch("/api/pet", {
-															method: "PUT",
-															headers: { "Content-Type": "application/json" },
-															body: JSON.stringify({ my: ownForm }),
+														const key = ownForm.apiKey.trim() || ownDirect?.apiKey || "";
+														if (!/^https?:\/\//.test(ownForm.baseUrl.trim())) {
+															throw new Error("API 地址不合法（需 http(s):// 开头）");
+														}
+														if (!key) throw new Error("API Key 必填");
+														const saved = await connectOwn({
+															baseUrl: ownForm.baseUrl,
+															apiKey: key,
+															model: ownForm.model,
 														});
-														const d = (await r.json().catch(() => ({}))) as { error?: string };
-														if (!r.ok) throw new Error(d.error || "保存失败");
-														refresh();
-														setSettingsMsg("✓ 已接入自己的模型，无限畅聊开始！");
+														setSettingsMsg(
+															`✓ 已接入${saved.model ? `（${saved.model}）` : ""}，无限畅聊开始！`
+														);
 														setOwnForm((f) => ({ ...f, apiKey: "" }));
 													} catch (err) {
-														setSettingsMsg(err instanceof Error ? err.message : "保存失败");
+														setSettingsMsg("✗ " + (err instanceof Error ? err.message : "保存失败"));
 													} finally {
 														setSettingsBusy(false);
 													}
@@ -975,7 +1000,7 @@ export default function Live2DHome({
 											>
 												<label className="block">
 													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-														① API 地址（Base URL，一般以 /v1 结尾）
+														API 地址（一般以 /v1 结尾）
 													</span>
 													<input
 														className="input !py-1 !text-[11.5px]"
@@ -986,12 +1011,13 @@ export default function Live2DHome({
 												</label>
 												<label className="block">
 													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-														② API Key（密钥，sk- 开头；已保存过可留空）
+														API Key（sk- 开头；已接入过可留空沿用）
 													</span>
 													<input
 														className="input !py-1 !text-[11.5px]"
 														type="password"
 														placeholder="sk-…"
+														autoComplete="off"
 														value={ownForm.apiKey}
 														onChange={(e) => setOwnForm((f) => ({ ...f, apiKey: e.target.value }))}
 													/>
@@ -1002,46 +1028,41 @@ export default function Live2DHome({
 													disabled={settingsBusy}
 													onClick={async () => {
 														setSettingsBusy(true);
-														setSettingsMsg("正在测试连通…");
+														setSettingsMsg("正在从你的浏览器测试连通…");
 														try {
-															const r = await fetch("/api/pet?models=1", {
-																method: "POST",
-																headers: { "Content-Type": "application/json" },
-																body: JSON.stringify({ models: ownForm }),
-															});
-															const d = (await r.json().catch(() => ({}))) as {
-																models?: string[];
-																error?: string;
-															};
-															if (!r.ok || !d.models) {
-																throw new Error(
-																	d.error ||
-																		"连不通：检查地址是否以 /v1 结尾、Key 是否正确"
-																);
+															const key = ownForm.apiKey.trim() || ownDirect?.apiKey || "";
+															if (!ownForm.baseUrl.trim() || !key) {
+																throw new Error("先填 API 地址和 API Key");
 															}
-															setOwnModels(d.models);
-											// 没选模型时自动用清单第一个（模型名本来就不该是必填项）
-											if (!ownForm.model && d.models?.[0]) {
-												setOwnForm((f) => ({ ...f, model: d.models![0] }));
-											}
+															const out = await testOwn(ownForm.baseUrl, key);
+															if ("error" in out) throw new Error(out.error);
+															setOwnModels(out.models);
+															// 没选模型时自动用清单第一个
+															if (!ownForm.model && out.models[0]) {
+																setOwnForm((f) => ({ ...f, model: out.models[0] }));
+															}
+															// 沿用的旧 Key 写回表单，保存时才带得上
+															if (!ownForm.apiKey.trim()) {
+																setOwnForm((f) => ({ ...f, apiKey: key }));
+															}
 															setSettingsMsg(
-																`✓ 连通成功！你的 Key 可用（${d.models.length} 个模型），点下面选一个`
+																out.models.length > 0
+																	? `✓ 连通！共 ${out.models.length} 个模型，已帮你选好第一个（可改）`
+																	: "✓ 连通，但这个接口没返回模型清单：请手动填模型名"
 															);
 														} catch (err) {
-															setSettingsMsg(
-																"✗ " + (err instanceof Error ? err.message : "测试失败")
-															);
+															setSettingsMsg("✗ " + (err instanceof Error ? err.message : "测试失败"));
 														} finally {
 															setSettingsBusy(false);
 														}
 													}}
 												>
-													{settingsBusy ? "测试中…" : "🔍 测试并获取模型列表"}
+													{settingsBusy ? "测试中…" : "🔍 测试并获取模型"}
 												</button>
 												{ownModels.length > 0 && (
 													<div>
 														<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-															③ 选一个模型（点名字填入）
+															选一个模型（点名字填入）
 														</span>
 														<div className="flex flex-wrap gap-1">
 															{ownModels.map((id) => (
@@ -1063,7 +1084,7 @@ export default function Live2DHome({
 												)}
 												<label className="block">
 													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-														模型名（可不填：不填自动用清单里第一个）
+														模型名（可不填：自动用清单里第一个）
 													</span>
 													<input
 														className="input !py-1 !text-[11.5px]"
@@ -1088,10 +1109,10 @@ export default function Live2DHome({
 															onClick={async () => {
 																setSettingsBusy(true);
 																try {
-																	await fetch("/api/pet?own=1", { method: "DELETE" });
-																	refresh();
+																	await disconnectOwn();
 																	setSettingsMsg("已断开自己的模型，回到站内模型");
 																	setOwnModels([]);
+																	setOwnForm({ baseUrl: "", apiKey: "", model: "" });
 																} finally {
 																	setSettingsBusy(false);
 																}
@@ -1111,13 +1132,16 @@ export default function Live2DHome({
 									</p>
 								)}
 							</div>
-						) : !aiConfigured ? (
+						) : !aiConfigured && !ownDirect ? (
 							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
 								还没接上 AI 大脑喵~
 								<br />
 								管理员可在「管理面板 → 守盘助手 → AI 对话」
 								<br />
 								填入 API Key 后就能和她聊天了
+								<span className="mt-1 block">
+									（或 ⚙ 里接入自己的模型，不需要站内配置）
+								</span>
 							</p>
 						) : myMode === null ? (
 							<p className="py-3 text-center text-[11px] leading-relaxed text-zinc-400">
@@ -1179,22 +1203,30 @@ export default function Live2DHome({
 								ref={inputRef}
 								className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[12.5px] text-zinc-800 outline-none focus:border-accent-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-accent-500"
 								placeholder={
-									!aiConfigured
-										? "接入 AI 后才能聊天哦"
-										: remaining === 0
-											? "聊天次数用完啦~（⚙ 里接入自己的模型可无限聊）"
-											: "说点什么…"
+									myMode === null
+										? "登录后才能聊天哦~"
+										: !aiConfigured && !ownDirect
+											? "接入 AI 后才能聊天哦（或点 ⚙ 接入自己的模型）"
+											: remaining === 0
+												? "聊天次数用完啦~（⚙ 里接入自己的模型可无限聊）"
+												: "说点什么…"
 								}
 								maxLength={500}
 								value={chatInput}
 								onChange={(e) => setChatInput(e.target.value)}
-								disabled={myMode === null || !aiConfigured || remaining === 0}
+								disabled={
+									myMode === null || (!aiConfigured && !ownDirect) || remaining === 0
+								}
 							/>
 							<button
 								type="submit"
 								className="shrink-0 rounded-full bg-accent-500 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-600 disabled:opacity-50"
 								disabled={
-									waiting || !chatInput.trim() || !aiConfigured || remaining === 0
+									waiting ||
+									!chatInput.trim() ||
+									myMode === null ||
+									(!aiConfigured && !ownDirect) ||
+									remaining === 0
 								}
 							>
 								发送
@@ -1202,13 +1234,17 @@ export default function Live2DHome({
 						</div>
 						{/* 剩余次数：无限（-1）= 管理员或已接入自己的模型 */}
 						<p className="px-1 text-center text-[10.5px] text-zinc-400 dark:text-zinc-500">
-							{aiConfigured
-								? remaining === -1
-									? "∞ 无限畅聊"
-									: remaining === 0
-										? "聊天次数已用完（共 5 次；⚙ 接入自己的模型可无限聊）"
-										: `还可以聊 ${remaining ?? "…"} 次（共 5 次）`
-								: "未接入 AI"}
+							{myMode === null
+								? "登录后才能和她聊天（每账号 5 次）"
+								: !aiConfigured && !ownDirect
+									? "未接入 AI"
+									: remaining === -1
+										? ownDirect
+											? "∞ 无限畅聊（直连你自己的接口）"
+											: "∞ 无限畅聊"
+										: remaining === 0
+											? "聊天次数已用完（共 5 次；⚙ 接入自己的模型可无限聊）"
+											: `还可以聊 ${remaining ?? "…"} 次（共 5 次）`}
 						</p>
 					</form>
 				</div>

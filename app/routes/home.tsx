@@ -3149,6 +3149,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 				modelKey={petModel}
 				aiConfigured={petAiConfigured}
 				dark={isDark}
+				userIdentity={user ? String(user.id) : null}
 			/>
 
 			{showLogin && (
