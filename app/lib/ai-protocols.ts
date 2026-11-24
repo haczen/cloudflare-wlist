@@ -72,6 +72,20 @@ export function shouldTryVersioned(status: number): boolean {
 	return status === 403 || status === 404 || status === 405;
 }
 
+/**
+ * 响应体到底是不是 API 的 JSON 应答。
+ * 真实陷阱：不少中转是 SPA，裸路径（不带 /v1）也回 200——但内容是网站首页的 HTML，
+ * 状态码看着完全正常。只看状态码会把它当成功，随后 JSON 解析失败报出一堆莫名其妙的错。
+ */
+export async function isApiJson(res: Response): Promise<boolean> {
+	const type = res.headers.get("content-type") || "";
+	if (type.includes("json")) return true;
+	if (!type.includes("text")) return false;
+	// 有的服务不写 content-type：看正文第一个字符是不是 JSON 的 { 或 [
+	const head = (await res.clone().text().catch(() => "")).trimStart().slice(0, 1);
+	return head === "{" || head === "[";
+}
+
 /** 从各家协议的应答里把回复文本抠出来（Chat / Responses / Messages / 旧 Completions 全兼容） */
 export function extractReply(d: unknown): string {
 	if (!d || typeof d !== "object") return "";
@@ -159,6 +173,9 @@ export function describeFailures(
 	}
 	if (tries.every((t) => t.status === 404)) {
 		return "接口不存在：确认 API 地址（一般以 /v1 结尾）";
+	}
+	if (tries.some((t) => t.text === "返回的是网页而不是 API 数据")) {
+		return "这个地址返回的是网页而不是 API 数据：API 地址应填接口入口（一般以 /v1 结尾），而不是网站首页";
 	}
 	if (tries.some((t) => t.status === 429)) {
 		return "上游限流 / 额度用完（429）：" + (tries.find((t) => t.status === 429)?.text || "").slice(0, 80);

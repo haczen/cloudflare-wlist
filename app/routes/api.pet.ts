@@ -22,6 +22,7 @@ import {
 	buildChatAttempts,
 	candidateUrls,
 	shouldTryVersioned,
+	isApiJson,
 	extractReply,
 	extractModelIds,
 	describeFailures,
@@ -179,8 +180,13 @@ async function callUpstream(
 			if (!res) return last; // 超时/断连很耗时，不再追加等待
 			last = res;
 			if (res.status >= 520) continue; // 源站异常：原地再试一次
-			if (shouldTryVersioned(res.status) && u < urls.length - 1) {
-				break; // 这个地址不存在/不让进 → 换成带 /v1 的地址
+			// 裸路径 200 但回的是网站首页（SPA 兜底）——等于「这个地址不对」，补 /v1 再试
+			const looksWrong = res.ok && !(await isApiJson(res));
+			if (
+				(shouldTryVersioned(res.status) || looksWrong) &&
+				u < urls.length - 1
+			) {
+				break; // 换成带 /v1 的地址
 			}
 			return res;
 		}
@@ -208,6 +214,11 @@ async function callModel(
 			continue;
 		}
 		if (res.ok) {
+			// 200 但不是 JSON：补了 /v1 仍拿到网页——这个地址不是 API 入口
+			if (!(await isApiJson(res))) {
+				tries.push({ via: spec.via, status: res.status, text: "返回的是网页而不是 API 数据" });
+				continue;
+			}
 			const data = await res.json().catch(() => null);
 			const reply = extractReply(data);
 			if (reply) return { reply, via: spec.via };
@@ -226,7 +237,14 @@ async function listUpstreamModels(
 	baseUrl: string,
 	apiKey: string
 ): Promise<Response | null> {
-	return callUpstream(baseUrl, apiKey, "/models", { method: "GET" });
+	const res = await callUpstream(baseUrl, apiKey, "/models", { method: "GET" });
+	// 200 但不是 JSON：补了 /v1 还是网页（这个地址不是 API 入口）——
+	// 统一成 404，让各调用点现有的「接口不存在」分支给出明确提示，
+	// 而不是解析出 0 个模型 / 空模型名
+	if (res?.ok && !(await isApiJson(res))) {
+		return new Response("not an api endpoint", { status: 404 });
+	}
+	return res;
 }
 
 /** 拉模型清单并取第一个（用户没填模型名时用）；拉不到返回空串 */

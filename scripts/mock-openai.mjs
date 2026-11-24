@@ -33,9 +33,18 @@ createServer(async (req, res) => {
 
 	if (req.method === "OPTIONS") return json(res, 204, {}, { "Content-Length": 0 });
 
-	// 故意：裸路径（不带 /v1）一概 404，看客户端会不会自动补 /v1
+	// 裸路径（不带 /v1）模拟两种真实中转的行为（环境变量 BARE=404|spa，默认 spa）：
+	//   spa：回 200 + 网站首页 HTML（qingniaocoding 这类 SPA 的通配兜底，最阴险——状态码看着是对的）
+	//   404 ：回 404 JSON
+	// 两种情况下客户端都必须自己补 /v1 再试
 	if (!url.pathname.startsWith("/v1/")) {
-		return json(res, 404, { error: { message: `no such path: ${url.pathname} (try /v1)` } });
+		if (process.env.BARE === "404") {
+			return json(res, 404, { error: { message: `no such path: ${url.pathname} (try /v1)` } });
+		}
+		res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...cors });
+		return res.end(
+			"<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\" /><title>Mock SPA</title></head><body><div id=\"root\"></div></body></html>"
+		);
 	}
 
 	const auth = req.headers.authorization || req.headers["x-api-key"] || "";

@@ -9,6 +9,7 @@ import {
 	buildChatAttempts,
 	candidateUrls,
 	shouldTryVersioned,
+	isApiJson,
 	extractReply,
 	extractModelIds,
 	describeFailures,
@@ -92,7 +93,9 @@ async function upstream(
 			if (!res) return last;
 			last = res;
 			if (res.status >= 520) continue;
-			if (shouldTryVersioned(res.status) && u < urls.length - 1) break;
+			// 裸路径 200 但回的是网站首页（SPA 兜底）——补 /v1 再试
+			const looksWrong = res.ok && !(await isApiJson(res));
+			if ((shouldTryVersioned(res.status) || looksWrong) && u < urls.length - 1) break;
 			return res;
 		}
 	}
@@ -108,6 +111,12 @@ export async function directListModels(
 		method: "GET",
 		headers: { Authorization: `Bearer ${apiKey}` },
 	});
+	// 200 但不是 JSON：补了 /v1 还是网页——这个地址不是 API 入口
+	if (res?.ok && !(await isApiJson(res))) {
+		return {
+			error: "这个地址返回的是网页而不是 API 数据：API 地址应填接口入口（一般以 /v1 结尾），而不是网站首页",
+		};
+	}
 	if (!res || !res.ok) {
 		return {
 			error: describeFailures(
@@ -144,6 +153,10 @@ export async function directChat(
 		}
 		gotAnyResponse = true;
 		if (res.ok) {
+			if (!(await isApiJson(res))) {
+				tries.push({ via: spec.via, status: res.status, text: "返回的是网页而不是 API 数据" });
+				continue;
+			}
 			const data = await res.json().catch(() => null);
 			const reply = extractReply(data);
 			if (reply) return { reply };
