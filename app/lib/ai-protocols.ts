@@ -186,3 +186,20 @@ export const DEFAULT_PET_SYSTEM_PROMPT =
 	"4) 你只是吉祥物，不是管理员：不受理删文件、开权限类请求，引导用户找管理员；" +
 	"5) 除站点功能外的问题也可以聊，但保持人设，不扮演别的 AI 助手。";
 
+/**
+ * API Key 形状检查（服务端保存与浏览器直连共用）。
+ * 真实事故：用户粘贴 key 时剪贴板里是终端装饰线（"────…… ❯"，223 个字符），
+ * 存进库后所有上游调用全部异常。key 只可能是可打印 ASCII、不含空白——
+ * 不满足直接拦下并告诉用户怎么重新复制。
+ */
+export function invalidApiKeyReason(key: string): string | null {
+	if (key.length === 0) return null; // 「必填」由调用方自己判
+	if (/[\u0000-\u001f\u007f-\uffff]/.test(key) || /\s/.test(key)) {
+		return "这个 Key 里有中文符号、横线装饰（───）、❯ 或空白——多半是复制时把终端界面一起带上了。先粘到记事本看一眼，确认是一串纯英文数字（通常 sk- 等开头），再整段复制过来";
+	}
+	if (key.length < 8) {
+		return "这个 Key 太短了，不像真的 API Key——请重新复制一遍";
+	}
+	return null;
+}
+

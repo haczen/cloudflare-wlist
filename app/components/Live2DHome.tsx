@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import PetStand from "./PetStand";
 import { usePetChat } from "./usePetChat";
+import { invalidApiKeyReason } from "~/lib/ai-protocols";
 
 /** 日常台词 */
 const PHRASES: string[] = [
@@ -1000,6 +1001,8 @@ export default function Live2DHome({
 															throw new Error("API 地址不合法（需 http(s):// 开头）");
 														}
 														if (!key) throw new Error("API Key 必填");
+														const keyShape = invalidApiKeyReason(key);
+														if (keyShape) throw new Error(keyShape);
 														const saved = await connectOwn({
 															baseUrl: ownForm.baseUrl,
 															apiKey: key,
@@ -1052,6 +1055,8 @@ export default function Live2DHome({
 															if (!ownForm.baseUrl.trim() || !key) {
 																throw new Error("先填 API 地址和 API Key");
 															}
+															const testShape = invalidApiKeyReason(key);
+															if (testShape) throw new Error(testShape);
 															const out = await testOwn(ownForm.baseUrl, key);
 															if ("error" in out) throw new Error(out.error);
 															setOwnModels(out.models);

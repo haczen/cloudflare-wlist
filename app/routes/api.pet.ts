@@ -25,6 +25,7 @@ import {
 	extractReply,
 	extractModelIds,
 	describeFailures,
+	invalidApiKeyReason,
 	type ChatTurn,
 } from "~/lib/ai-protocols";
 import {
@@ -446,6 +447,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 				if (!apiKey) {
 					return Response.json({ error: "API Key 必填" }, { status: 400 });
 				}
+				const keyShape = invalidApiKeyReason(apiKey);
+				if (keyShape) {
+					return Response.json({ error: keyShape }, { status: 400 });
+				}
 				// 模型名可以不填：没填就自动取该接口清单里的第一个
 				let model = String(body.my.model || "").trim();
 				if (!model) {
@@ -500,6 +505,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 		}
 		if (!apiKey) {
 			return Response.json({ error: "API Key 必填" }, { status: 400 });
+		}
+		const siteKeyShape = invalidApiKeyReason(apiKey);
+		if (siteKeyShape) {
+			return Response.json({ error: siteKeyShape }, { status: 400 });
 		}
 		let model = String(body.model || "").trim();
 		if (!model) {
