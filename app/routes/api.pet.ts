@@ -131,55 +131,224 @@ async function deleteUserPetConfig(
 		.run();
 }
 
-/** OpenAI 兼容端点兜底：Base URL 少 /v1 → 403/404 时自动补试一次；
- *  网络级失败（连接超时/被重置）重试一次——中转类上游对 CF Workers 的
- *  POST 长连接偶发抽风，第二次连接往往就通了 */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 单次上游请求（带两重兜底）：
+ * 1) Base URL 没带版本段时先打原地址，404/405/403 再补 /v1 重试
+ *    （顺序不能反：Azure 这类 Base URL 本身就是完整路径，先补 /v1 会打坏）
+ * 2) 网络错误 / 52x（Cloudflare「源站异常」）→ 等一下原地重试一次
+ * 返回 null = 彻底连不上；否则返回最后一个响应（可能仍是 52x）
+ */
 async function callUpstream(
 	baseUrl: string,
 	apiKey: string,
 	path: string,
 	init: RequestInit
 ): Promise<Response | null> {
-	const doFetch = (b: string) =>
-		fetch(`${b}${path}`, {
+	const base = baseUrl.replace(/\/+$/, "");
+	const urls = [`${base}${path}`];
+	if (!/\/v\d+[a-z]*$/i.test(base)) urls.push(`${base}/v1${path}`);
+	const doFetch = (u: string) =>
+		fetch(u, {
 			...init,
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${apiKey}`,
-				// Worker 的 fetch 默认不带 UA；且本站上游（hub.oaifree.com 类中转）
-				// 有客户端白名单（仅允许 Codex / Claude Code / Cursor 等编程客户端），
-				// 普通 UA 会被 403 client_not_allowed 拒——挂 Codex CLI 同款 UA 通过
+				// Worker 的 fetch 默认不带 UA；且部分中转有客户端白名单
+				// （仅允许 Codex / Claude Code / Cursor 等编程客户端），普通 UA 会被
+				// 403 client_not_allowed 拒——挂 Codex CLI 同款 UA
 				"User-Agent": "codex_cli_rs/0.42.0",
 				...(init.headers || {}),
 			},
 			signal: AbortSignal.timeout(20_000),
 		}).catch(() => null);
-	let res = await doFetch(baseUrl);
-	// 网络级失败 → 短暂等待后原址重试一次（换一个 worker 实例/连接池）
-	if (!res) {
-		await new Promise((r) => setTimeout(r, 800));
-		res = await doFetch(baseUrl);
+	let last: Response | null = null;
+	for (let u = 0; u < urls.length; u++) {
+		for (let attempt = 0; attempt < 2; attempt++) {
+			if (attempt > 0) await sleep(700);
+			const res = await doFetch(urls[u]);
+			if (!res) return last; // 超时/断连很耗时，不再追加等待
+			last = res;
+			if (res.status >= 520) continue; // 源站异常：原地再试一次
+			if (
+				(res.status === 403 || res.status === 404 || res.status === 405) &&
+				u < urls.length - 1
+			) {
+				break; // 这个地址不存在/不让进 → 换成带 /v1 的地址
+			}
+			return res;
+		}
 	}
-	if (
-		res &&
-		!res.ok &&
-		(res.status === 403 || res.status === 404) &&
-		!/\/v\d+$/.test(baseUrl)
-	) {
-		const retry = await doFetch(`${baseUrl}/v1`);
-		if (retry) res = retry;
+	return last;
+}
+
+/** 从各家协议的应答里把回复文本抠出来（Chat / Responses / Messages / 旧 Completions 全兼容） */
+function extractReply(d: unknown): string {
+	if (!d || typeof d !== "object") return "";
+	const data = d as Record<string, any>;
+	const pick = (v: unknown): string => {
+		if (typeof v === "string") return v;
+		if (Array.isArray(v)) {
+			return v
+				.map((p) => (p && typeof p === "object" ? String((p as any).text ?? "") : ""))
+				.join("");
+		}
+		return "";
+	};
+	const choice = Array.isArray(data.choices) ? data.choices[0] : null;
+	if (choice) {
+		const c = pick(choice.message?.content) || pick(choice.text) || pick(choice.delta?.content);
+		if (c.trim()) return c.trim();
 	}
-	return res;
+	if (typeof data.output_text === "string" && data.output_text.trim()) {
+		return data.output_text.trim();
+	}
+	if (Array.isArray(data.output)) {
+		const c = data.output.map((item: any) => pick(item?.content)).join("");
+		if (c.trim()) return c.trim();
+	}
+	if (Array.isArray(data.content)) {
+		const c = pick(data.content);
+		if (c.trim()) return c.trim();
+	}
+	if (typeof data.completion === "string" && data.completion.trim()) {
+		return data.completion.trim();
+	}
+	return "";
+}
+
+/** 三种聊天协议依次尝试，直到某一条给出回复；全败则返回能看懂的原因 */
+async function callModel(
+	baseUrl: string,
+	apiKey: string,
+	model: string,
+	systemPrompt: string,
+	history: Array<{ role: "user" | "assistant"; content: string }>
+): Promise<{ reply: string; via: string } | { error: string }> {
+	const specs = [
+		{
+			via: "chat",
+			path: "/chat/completions",
+			headers: {} as Record<string, string>,
+			body: {
+				model,
+				messages: [{ role: "system", content: systemPrompt }, ...history],
+				max_tokens: 480,
+				temperature: 0.8,
+			},
+		},
+		{
+			via: "responses",
+			path: "/responses",
+			headers: {} as Record<string, string>,
+			body: {
+				model,
+				instructions: systemPrompt,
+				input: history,
+				max_output_tokens: 480,
+			},
+		},
+		{
+			via: "messages",
+			path: "/messages",
+			headers: {
+				"x-api-key": apiKey,
+				"anthropic-version": "2023-06-01",
+			} as Record<string, string>,
+			body: {
+				model,
+				system: systemPrompt,
+				messages: history,
+				max_tokens: 480,
+			},
+		},
+	];
+	const tries: Array<{ via: string; status: number; text?: string }> = [];
+	for (const spec of specs) {
+		const res = await callUpstream(baseUrl, apiKey, spec.path, {
+			method: "POST",
+			headers: spec.headers,
+			body: JSON.stringify(spec.body),
+		});
+		if (!res) {
+			tries.push({ via: spec.via, status: 0 });
+			continue;
+		}
+		if (res.ok) {
+			const data = await res.json().catch(() => null);
+			const reply = extractReply(data);
+			if (reply) return { reply, via: spec.via };
+			tries.push({ via: spec.via, status: res.status, text: "回复为空" });
+			continue;
+		}
+		const text = (await res.text().catch(() => "")).slice(0, 200);
+		tries.push({ via: spec.via, status: res.status, text });
+		// Key 不对：换哪个端点都一样，不用再试
+		if (res.status === 401) break;
+	}
+	// 把尝试结果翻译成人话
+	const statuses = tries.map((t) => t.status);
+	const all52x = statuses.length > 0 && statuses.every((s) => s >= 520);
+	const allNet = statuses.every((s) => s === 0);
+	if (all52x) {
+		return {
+			error:
+				"上游拒绝了来自本站服务器的请求（520）。这个接口只接受 Codex / Claude Code 这类客户端从你自己的电脑直连，不接受网站服务器转发——换一个标准的 OpenAI 兼容接口即可",
+		};
+	}
+	if (allNet) {
+		return { error: "连不上上游（超时或被重置）：检查 Base URL 是否写对" };
+	}
+	if (tries.some((t) => t.status === 401)) {
+		return { error: "API Key 无效或已过期" };
+	}
+	const notAllowed = tries.find(
+		(t) => t.status === 403 && /not.?allowed|client|whitelist|编程客户端/i.test(t.text || "")
+	);
+	if (notAllowed) {
+		return {
+			error:
+				"该接口仅允许编程客户端（Codex / Claude Code 等）使用，不接受网站服务端调用——换一个标准 OpenAI 兼容接口即可",
+		};
+	}
+	if (tries.every((t) => t.status === 404)) {
+		return { error: "接口不存在：确认 Base URL（一般以 /v1 结尾）" };
+	}
+	return {
+		error:
+			"上游没给出回复：" +
+			tries
+				.map((t) => `${t.via} ${t.status === 0 ? "连不上" : t.status}${t.text ? `（${t.text.slice(0, 60)}）` : ""}`)
+				.join("；"),
+	};
 }
 
 async function listUpstreamModels(
 	baseUrl: string,
 	apiKey: string
-): Promise<Response> {
-	return (
-		(await callUpstream(baseUrl, apiKey, "/models", { method: "GET" })) ??
-		new Response("upstream unreachable", { status: 502 })
-	);
+): Promise<Response | null> {
+	return callUpstream(baseUrl, apiKey, "/models", { method: "GET" });
+}
+
+/** 拉模型清单并取第一个（用户没填模型名时用）；拉不到返回空串 */
+async function pickFirstModel(
+	baseUrl: string,
+	apiKey: string
+): Promise<string> {
+	try {
+		const res = await listUpstreamModels(baseUrl, apiKey);
+		if (!res || !res.ok) return "";
+		const data = (await res.json().catch(() => null)) as
+			| { data?: Array<{ id?: string }> }
+			| Array<{ id?: string }>
+			| null;
+		const list = Array.isArray(data) ? data : data?.data ?? [];
+		const first = list.map((m) => m?.id).filter((id): id is string => typeof id === "string")[0];
+		return first || "";
+	} catch {
+		return "";
+	}
 }
 
 export async function loader({ request, context }: Route.LoaderArgs) {
@@ -189,6 +358,57 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 	const meta = getRequestMeta(request);
 	const config = await readPetAiConfig(db);
 	const url = new URL(request.url);
+
+	// 上游体检（?diag=1，管理员用）：从本站服务器把三种聊天协议 + 模型清单各打一遍，
+	// 逐条报状态码与耗时——「到底哪条路通」一眼看清，不再只给一句 502
+	if (url.searchParams.get("diag") === "1") {
+		if (!isAdmin) {
+			return Response.json({ error: "只有管理员可以诊断" }, { status: 403 });
+		}
+		if (!config) {
+			return Response.json({ error: "站内尚未配置 AI" }, { status: 400 });
+		}
+		const { baseUrl, apiKey, model } = config;
+		const probe = async (
+			name: string,
+			path: string,
+			init: RequestInit
+		) => {
+			const t0 = Date.now();
+			const res = await callUpstream(baseUrl, apiKey, path, init);
+			const ms = Date.now() - t0;
+			const status = res ? res.status : 0;
+			const text = res
+				? (await res.text().catch(() => "")).slice(0, 160).replace(/\s+/g, " ")
+				: "";
+			return { name, status, ms, text };
+		};
+		const checks = [
+			await probe("模型清单 /models", "/models", { method: "GET" }),
+			await probe("Chat /chat/completions", "/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({
+					model,
+					messages: [{ role: "user", content: "ping" }],
+					max_tokens: 5,
+				}),
+			}),
+			await probe("Responses /responses", "/responses", {
+				method: "POST",
+				body: JSON.stringify({ model, input: "ping", max_output_tokens: 16 }),
+			}),
+			await probe("Messages /messages", "/messages", {
+				method: "POST",
+				headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+				body: JSON.stringify({
+					model,
+					messages: [{ role: "user", content: "ping" }],
+					max_tokens: 5,
+				}),
+			}),
+		];
+		return Response.json({ baseUrl, model, checks });
+	}
 
 	// 可用模型清单：?models=1 站内（登录用户可用）；&own=1 用自己保存的 key
 	if (url.searchParams.get("models") === "1") {
@@ -215,24 +435,31 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 			apiKey = config.apiKey;
 		}
 		const res = await listUpstreamModels(baseUrl, apiKey);
-		if (!res.ok) {
+		if (!res || !res.ok) {
 			return Response.json(
-				{ error: `上游返回 ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}` },
+				{
+					error: res
+						? `拉不到模型清单：上游返回 ${res.status}${res.status >= 520 ? "（它不接受来自本站服务器的请求）" : ""}`
+						: "拉不到模型清单：连不上上游（检查 API 地址）",
+				},
 				{ status: 502 }
 			);
 		}
 		const data = (await res.json().catch(() => null)) as
 			| { data?: Array<{ id?: string }> }
+			| Array<{ id?: string }>
 			| null;
-		const models = (data?.data ?? [])
-			.map((m) => m.id)
+		const list = Array.isArray(data) ? data : data?.data ?? [];
+		const models = list
+			.map((m) => m?.id)
 			.filter((id): id is string => typeof id === "string");
 		return Response.json({ models });
 	}
 
-	// 我的模式：own = 接入了自己的模型（无限）；site = 用站内的
+	// 我的模式：own = 接入了自己的模型（无限）；site = 用站内的。
+	// 模型名可以不填（聊天时自动取清单第一个），所以只看地址 + key
 	const own = user ? await getUserPetConfig(db, user.id) : null;
-	const ownActive = !!(own?.baseUrl && own?.apiKey && own?.model);
+	const ownActive = !!(own?.baseUrl && own?.apiKey);
 	const unlimited = ownActive || isAdmin;
 	const used = await getChatUsage(db, chatIdentity(user, meta.ip));
 
@@ -240,13 +467,14 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 		configured: !!config,
 		// 形象对全部访客可见（前端按它加载模型）
 		petModel: await getPetModel(db),
-		// -1 = 无限畅聊（管理员 / 已接入自己的模型）
 		// -1 = 无限（管理员 / 已接入自己的模型）；游客 0（前端显示登录引导）
 		remaining: !user ? 0 : unlimited ? -1 : Math.max(0, CHAT_QUOTA - used),
 		quota: CHAT_QUOTA,
 		// myMode: own=自己的模型 / site=站内模型 / null=未登录
 		myMode: user ? (ownActive ? "own" : "site") : null,
-		myModel: ownActive ? own!.model : own?.siteModel || config?.model || null,
+		myModel: ownActive
+			? own!.model || "(自动)"
+			: own?.siteModel || config?.model || null,
 		// 完整站内配置只给管理员（人设提示词只有管理员能看）
 		...(isAdmin && config
 			? {
@@ -289,20 +517,22 @@ export async function action({ request, context }: Route.ActionArgs) {
 					siteConfig &&
 					body.mySiteModel !== siteConfig.model
 				) {
-					// 校验确实是站内中转有的模型（防乱填）——拉一次清单
+					// 校验确实是站内中转有的模型（防乱填）——拉一次清单；
+					// 清单拉不到就不拦（上游抽风时不该连选模型都选不了）
 					const res = await listUpstreamModels(
 						siteConfig.baseUrl,
 						siteConfig.apiKey
 					);
-					const data = res.ok
-						? ((await res.json().catch(() => null)) as {
-								data?: Array<{ id?: string }>;
-							} | null)
-						: null;
+					const data =
+						res && res.ok
+							? ((await res.json().catch(() => null)) as {
+									data?: Array<{ id?: string }>;
+								} | null)
+							: null;
 					const ids = (data?.data ?? [])
 						.map((m) => m.id)
 						.filter((id): id is string => typeof id === "string");
-					if (!ids.includes(body.mySiteModel)) {
+					if (ids.length > 0 && !ids.includes(body.mySiteModel)) {
 						return Response.json({ error: "站内没有这个模型" }, { status: 400 });
 					}
 				}
@@ -314,18 +544,19 @@ export async function action({ request, context }: Route.ActionArgs) {
 			}
 			if (body.my) {
 				const baseUrl = String(body.my.baseUrl || "").trim().replace(/\/+$/, "");
-				const model = String(body.my.model || "").trim();
 				// key 留空 = 沿用已保存的
 				const apiKey =
 					String(body.my.apiKey || "").trim() || cur.apiKey || "";
 				if (!baseUrl || !/^https?:\/\//.test(baseUrl)) {
-					return Response.json({ error: "Base URL 不合法（需 http(s):// 开头，一般以 /v1 结尾）" }, { status: 400 });
-				}
-				if (!model) {
-					return Response.json({ error: "模型名必填（可用下方按钮拉取清单）" }, { status: 400 });
+					return Response.json({ error: "API 地址不合法（需 http(s):// 开头）" }, { status: 400 });
 				}
 				if (!apiKey) {
 					return Response.json({ error: "API Key 必填" }, { status: 400 });
+				}
+				// 模型名可以不填：没填就自动取该接口清单里的第一个
+				let model = String(body.my.model || "").trim();
+				if (!model) {
+					model = await pickFirstModel(baseUrl, apiKey);
 				}
 				await setUserPetConfig(db, user.id, {
 					...cur,
@@ -364,22 +595,22 @@ export async function action({ request, context }: Route.ActionArgs) {
 				return Response.json({ success: true });
 			}
 		}
-		// ---- 管理员：站内 AI 配置 ----
+		// ---- 管理员：站内 AI 配置（模型名可留空 = 自动取清单第一个）----
 		const baseUrl = String(body.baseUrl || "").trim().replace(/\/+$/, "");
-		const model = String(body.model || "").trim();
 		const systemPrompt = String(body.systemPrompt || "").trim();
 		const apiKey =
 			String(body.apiKey || "").trim() ||
 			(await readPetAiConfig(db))?.apiKey ||
 			"";
 		if (!baseUrl || !/^https?:\/\//.test(baseUrl)) {
-			return Response.json({ error: "Base URL 不合法（需 http(s):// 开头，如 https://api.deepseek.com/v1）" }, { status: 400 });
-		}
-		if (!model) {
-			return Response.json({ error: "模型名必填（如 deepseek-chat）" }, { status: 400 });
+			return Response.json({ error: "API 地址不合法（需 http(s):// 开头，如 https://api.deepseek.com/v1）" }, { status: 400 });
 		}
 		if (!apiKey) {
 			return Response.json({ error: "API Key 必填" }, { status: 400 });
+		}
+		let model = String(body.model || "").trim();
+		if (!model) {
+			model = await pickFirstModel(baseUrl, apiKey);
 		}
 		await writePetAiConfig(db, {
 			baseUrl,
@@ -432,17 +663,23 @@ export async function action({ request, context }: Route.ActionArgs) {
 				return Response.json({ error: "先填 Base URL 和 API Key" }, { status: 400 });
 			}
 			const res = await listUpstreamModels(baseUrl, apiKey);
-			if (!res.ok) {
+			if (!res || !res.ok) {
 				return Response.json(
-					{ error: `上游返回 ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}` },
+					{
+						error: res
+							? `连不上这个接口：上游返回 ${res.status}${res.status >= 520 ? "（它不接受来自本站服务器的请求，只允许 Codex / Claude Code 这类客户端从电脑直连）" : ""}`
+							: "连不上这个接口（超时或被重置）：检查 API 地址是否写对",
+					},
 					{ status: 502 }
 				);
 			}
 			const data = (await res.json().catch(() => null)) as
 				| { data?: Array<{ id?: string }> }
+				| Array<{ id?: string }>
 				| null;
-			const models = (data?.data ?? [])
-				.map((m) => m.id)
+			const list = Array.isArray(data) ? data : data?.data ?? [];
+			const models = list
+				.map((m) => m?.id)
 				.filter((id): id is string => typeof id === "string");
 			return Response.json({ models });
 		}
@@ -450,7 +687,7 @@ export async function action({ request, context }: Route.ActionArgs) {
 		// 聊天：优先用自己的模型（无限），否则站内模型
 		const siteConfig = await readPetAiConfig(db);
 		const own = user ? await getUserPetConfig(db, user.id) : null;
-		const ownActive = !!(own?.baseUrl && own?.apiKey && own?.model);
+		const ownActive = !!(own?.baseUrl && own?.apiKey);
 		if (!ownActive && !siteConfig) {
 			return Response.json(
 				{ error: "守盘助手还没接上大脑（管理员未配置 AI）" },
@@ -471,19 +708,19 @@ export async function action({ request, context }: Route.ActionArgs) {
 			);
 		}
 
-		const cfg = ownActive
+		const baseCfg = ownActive
 			? {
+					// 用户自己的模型也套用站内人设，保持角色一致
 					baseUrl: own!.baseUrl!,
 					apiKey: own!.apiKey!,
-					model: own!.model!,
-					// 用户自己的模型也套用站内人设，保持角色一致
+					model: own!.model || "",
 					systemPrompt: siteConfig?.systemPrompt,
 				}
 			: {
 					baseUrl: siteConfig!.baseUrl,
 					apiKey: siteConfig!.apiKey,
 					// 站内模式下用户可自选站内模型
-					model: own?.siteModel || siteConfig!.model,
+					model: own?.siteModel || siteConfig!.model || "",
 					systemPrompt: siteConfig!.systemPrompt,
 				};
 		const unlimited = ownActive || isAdmin;
@@ -517,82 +754,30 @@ export async function action({ request, context }: Route.ActionArgs) {
 			return Response.json({ error: "没有可回复的消息" }, { status: 400 });
 		}
 
-		const systemPrompt = cfg.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT;
-		let upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/chat/completions", {
-			method: "POST",
-			body: JSON.stringify({
-				model: cfg.model,
-				messages: [
-					{ role: "system", content: systemPrompt },
-					...history,
-				],
-				max_tokens: 480,
-				temperature: 0.8,
-			}),
-		});
-
-		// 部分中转（如 hub.oaifree.com 2026-11 起）停用了 /chat/completions，
-		// 要求改走 /responses（Responses API，Codex CLI 同款）——识别后自动切换
-		if (upstream && !upstream.ok && upstream.status === 400) {
-			const errText = await upstream.text().catch(() => "");
-			if (/chat_completions_disabled|\/responses/i.test(errText)) {
-				upstream = await callUpstream(cfg.baseUrl, cfg.apiKey, "/responses", {
-					method: "POST",
-					body: JSON.stringify({
-						model: cfg.model,
-						instructions: systemPrompt,
-						input: history,
-						max_output_tokens: 480,
-					}),
-				});
-			} else {
-				// 还原给下面的统一错误处理（text 已消费，直接就地返回）
+		// 模型名没填 → 自动取这个接口清单里的第一个
+		let model = baseCfg.model;
+		if (!model) {
+			model = await pickFirstModel(baseCfg.baseUrl, baseCfg.apiKey);
+			if (!model) {
 				return Response.json(
-					{ error: `上游返回 400：${errText.slice(0, 300)}` },
-					{ status: 502 }
+					{ error: "还没选模型，而且拉不到模型清单：到设置里点「测试并获取模型」选一个，或手动填模型名" },
+					{ status: 400 }
 				);
 			}
 		}
 
-		if (!upstream) {
-			return Response.json({ error: "上游网络不通（检查 Base URL / 模型名）" }, { status: 502 });
+		// 三种协议依次尝试（Chat / Responses / Messages），哪条通走哪条
+		const out = await callModel(
+			baseCfg.baseUrl,
+			baseCfg.apiKey,
+			model,
+			baseCfg.systemPrompt || DEFAULT_PET_SYSTEM_PROMPT,
+			history
+		);
+		if ("error" in out) {
+			return Response.json({ error: out.error }, { status: 502 });
 		}
-		if (!upstream.ok) {
-			const text = (await upstream.text().catch(() => "")).slice(0, 300);
-			const hint =
-				upstream.status === 404
-					? "（模型名或路径不对：确认模型 id 与 Base URL 是否以 /v1 结尾）"
-					: upstream.status === 401
-						? "（API Key 无效或已过期）"
-						: "";
-			return Response.json(
-				{ error: `上游返回 ${upstream.status}${hint}${text ? `：${text}` : ""}` },
-				{ status: 502 }
-			);
-		}
-		// 兼容两种应答：Chat Completions（choices[0].message.content）
-		// 与 Responses API（output[].content[].text / 顶层 output_text）
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const data = (await upstream.json().catch(() => null)) as any;
-		let reply: string | undefined;
-		if (data?.choices?.[0]?.message?.content) {
-			reply = String(data.choices[0].message.content).trim();
-		} else if (typeof data?.output_text === "string") {
-			reply = data.output_text.trim();
-		} else if (Array.isArray(data?.output)) {
-			const texts: string[] = [];
-			for (const item of data.output) {
-				if (Array.isArray(item?.content)) {
-					for (const c of item.content) {
-						if (typeof c?.text === "string") texts.push(c.text);
-					}
-				}
-			}
-			reply = texts.join("").trim();
-		}
-		if (!reply) {
-			return Response.json({ error: "上游没说话（回复为空）" }, { status: 502 });
-		}
+		const reply = out.reply;
 		// 成功回复才计数（无限身份不计数）
 		if (unlimited) {
 			return Response.json({ reply, remaining: -1 });

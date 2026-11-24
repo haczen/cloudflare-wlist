@@ -1,14 +1,13 @@
 /**
  * 守盘助手：悬浮在页面右下角的 Live2D 形象（无房间装饰）
  * - 形象 / AI 开关由 home loader 服务端直读下发（无探测请求，出场快一步）
- * - 加载链并行化：runtime 脚本与渲染库同时拉，失败回退 SVG 守盘小猫（SitePet）
+ * - 加载链并行化：runtime 脚本与渲染库同时拉；加载期整体隐藏，失败自动重试（不换形象）
  * - 底座：发光椭圆台座（渐变+描边，日夜两套配色），人物站在上面不悬空
  * - 灵动性：待机动作自动播；每 18~40 秒随机挑动作/表情自己玩，35% 概率冒台词
  * - 点击=互动（随机动作+表情+台词）；鼠标划过视线跟随
  * - AI 配置后 💬 聊天面板，走 /api/pet 服务端代理（key 不出服务端）
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import SitePet from "./SitePet";
 import PetStand from "./PetStand";
 import { usePetChat } from "./usePetChat";
 
@@ -43,6 +42,42 @@ const MODEL_CATALOG = [
 	{ key: "rice", file: "/live2d/rice/rice_pro_t03.model3.json", gen: 4, h: 340, stand: "cushion", dx: -70 },
 	{ key: "hiyori", file: "/live2d/hiyori/hiyori_free_t08.model3.json", gen: 4, h: 390, stand: "cushion", dx: -1 },
 ] as const;
+
+/**
+ * 首屏预加载清单。React 19 会把 <link rel="preload"> 提升到 <head>，所以这些标签
+ * 随服务端渲染的 HTML 一起到达——浏览器在解析页面脚本的同时就把模型最大的几个文件
+ * （运行时 + 骨架 + 贴图）拉下来了。否则要等 JS 启动、动态 import 完成后才开始请求，
+ * 慢网络下这段时间人物迟迟出不来。
+ */
+const PRELOAD: Record<string, { runtime: string; files: string[] }> = {
+	shizuku: {
+		runtime: "/live2d/core/live2d.min.js",
+		files: [
+			"/live2d/shizuku/shizuku.moc",
+			...Array.from({ length: 6 }, (_, i) => `/live2d/shizuku/shizuku.1024/texture_0${i}.png`),
+		],
+	},
+	tororo: {
+		runtime: "/live2d/core/live2dcubismcore.min.js",
+		files: ["/live2d/tororo/tororo.moc3", "/live2d/tororo/tororo.2048/texture_00.png"],
+	},
+	hijiki: {
+		runtime: "/live2d/core/live2dcubismcore.min.js",
+		files: ["/live2d/hijiki/hijiki.moc3", "/live2d/hijiki/hijiki.2048/texture_00.png"],
+	},
+	rice: {
+		runtime: "/live2d/core/live2dcubismcore.min.js",
+		files: [
+			"/live2d/rice/rice_pro_t03.moc3",
+			"/live2d/rice/rice_pro_t03.2048/texture_00.png",
+			"/live2d/rice/rice_pro_t03.2048/texture_01.png",
+		],
+	},
+	hiyori: {
+		runtime: "/live2d/core/live2dcubismcore.min.js",
+		files: ["/live2d/hiyori/hiyori_free_t08.moc3", "/live2d/hiyori/hiyori_free_t08.2048/texture_00.png"],
+	},
+};
 
 const STYLE = `
 @keyframes petstand-bubble-in {
@@ -85,8 +120,10 @@ export default function Live2DHome({
 	/** 站点当前主题（底座 Canvas 按此补间日夜调色板） */
 	dark: boolean;
 }) {
-	// 'loading' = 决定用 Live2D 还是回退；'live2d' | 'svg'
-	const [mode, setMode] = useState<"loading" | "live2d" | "svg">("loading");
+	// loading = 加载中（整体隐藏，不露空底座）｜live2d = 已就位｜failed = 多次重试仍失败
+	const [mode, setMode] = useState<"loading" | "live2d" | "failed">("loading");
+	/** 加载失败次数（自动重试用；换形象时归零） */
+	const failCountRef = useRef(0);
 	/** WebGL 上下文丢失自愈后强制重载模型用 */
 	const [reloadNonce, setReloadNonce] = useState(0);
 	const [phrase, setPhrase] = useState<string | null>(null);
@@ -461,6 +498,7 @@ export default function Live2DHome({
 	// 注意 mode 不进 deps：setMode('live2d') 若触发重跑，cleanup 会把刚建好的画布销毁
 	useEffect(() => {
 		if (loadedKeyRef.current === modelKey) return; // 这只已加载/加载中
+		setMode("loading");
 		let disposed = false;
 		loadedKeyRef.current = modelKey;
 		(async () => {
@@ -613,10 +651,19 @@ export default function Live2DHome({
 				// 调试句柄：线上量几何用（只读无害）
 				(window as unknown as { __wlistPetModel?: unknown }).__wlistPetModel =
 					model;
+				failCountRef.current = 0;
 				setMode("live2d");
 			} catch (err) {
-				console.warn("Live2D 加载失败，回退 SVG 小猫:", err);
-				setMode("svg");
+				console.warn("[守盘助手] 形象加载失败:", err);
+				// 不换回别的形象（用户选了谁就是谁）：网络抖动很常见，退避后自动重试
+				const attempt = ++failCountRef.current;
+				if (attempt <= 5) {
+					window.setTimeout(() => {
+						if (!disposed) setReloadNonce((n) => n + 1);
+					}, Math.min(1500 * (2 ** (attempt - 1)), 24000));
+				} else {
+					setMode("failed");
+				}
 			}
 		})();
 		return () => {
@@ -719,15 +766,14 @@ export default function Live2DHome({
 	}, [messages, waiting]);
 
 	// 回退：原守盘小猫（WebGL 不可用 / 模型加载失败）
-	if (mode === "svg") {
-		return <SitePet busy={busy} />;
-	}
 
 	const cat = MODEL_CATALOG.find((c) => c.key === modelKey) ?? MODEL_CATALOG[0];
 
 	return (
 		<div
-			className="fixed z-40 select-none"
+			className={`fixed z-40 select-none transition-opacity duration-300 ${
+				mode === "loading" ? "pointer-events-none opacity-0" : "opacity-100"
+			}`}
 			style={{
 				right: petPos ? petPos.r : 12,
 				bottom: petPos ? petPos.b : 8,
@@ -736,6 +782,15 @@ export default function Live2DHome({
 			}}
 		>
 			<style>{STYLE}</style>
+
+			{/* 首屏预加载：服务端渲染阶段就下发，模型文件与页面脚本并行下载（React 19 自动提升到 head） */}
+			{mode === "loading" &&
+				PRELOAD[cat.key]?.files.map((href) => (
+					<link key={href} rel="preload" href={href} as="fetch" />
+				))}
+			{mode === "loading" && PRELOAD[cat.key] && (
+				<link rel="preload" href={PRELOAD[cat.key].runtime} as="script" />
+			)}
 
 			{/* 底座：Canvas 手绘（坐垫/宠物小窝；日夜调色板逐帧补间，小窝前檐盖过脚边） */}
 			<PetStand
@@ -965,6 +1020,10 @@ export default function Live2DHome({
 																);
 															}
 															setOwnModels(d.models);
+											// 没选模型时自动用清单第一个（模型名本来就不该是必填项）
+											if (!ownForm.model && d.models?.[0]) {
+												setOwnForm((f) => ({ ...f, model: d.models![0] }));
+											}
 															setSettingsMsg(
 																`✓ 连通成功！你的 Key 可用（${d.models.length} 个模型），点下面选一个`
 															);
@@ -1004,7 +1063,7 @@ export default function Live2DHome({
 												)}
 												<label className="block">
 													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-														模型名（可手填，或点上面选）
+														模型名（可不填：不填自动用清单里第一个）
 													</span>
 													<input
 														className="input !py-1 !text-[11.5px]"
@@ -1190,12 +1249,20 @@ export default function Live2DHome({
 			</div>
 
 			{/* 加载中 */}
-			{mode === "loading" && (
-				<div className="absolute inset-x-0 bottom-6 z-20 flex justify-center">
-					<span className="animate-pulse rounded-full bg-white/80 px-3 py-1 text-xs text-amber-600 shadow dark:bg-zinc-800/80 dark:text-amber-300">
-						守盘助手睡醒了穿衣服中…
-					</span>
-				</div>
+			{/* 加载中：整个容器透明（不露空底座、不露加载字样），就位后淡入。
+			    多次自动重试仍失败才给一个可点的小提示——绝不换回别的形象 */}
+			{mode === "failed" && (
+				<button
+					type="button"
+					className="absolute inset-x-0 bottom-6 z-20 mx-auto block rounded-full bg-white/90 px-3 py-1 text-xs text-zinc-600 shadow dark:bg-zinc-800/90 dark:text-zinc-300"
+					onClick={() => {
+						failCountRef.current = 0;
+						setMode("loading");
+						setReloadNonce((n) => n + 1);
+					}}
+				>
+					守盘助手加载不出来 · 点这里重试
+				</button>
 			)}
 
 			{/* 聊天入口（常驻、醒目；跟着助手走） */}

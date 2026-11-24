@@ -3170,6 +3170,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 					onShowStats={(storage) => setStatsStorage(storage)}
 					onEditStorage={(storage) => setEditingStorage(storage)}
 					onAddStorage={() => setShowAddStorage(true)}
+					// 形象切换后重读 loader，守盘助手当场换人
+					onPetModelChanged={() => revalidator.revalidate()}
 				/>
 			)}
 

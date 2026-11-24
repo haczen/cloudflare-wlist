@@ -797,6 +797,7 @@ export function AdminPanel({
 	onShowStats,
 	onEditStorage,
 	onAddStorage,
+	onPetModelChanged,
 }: {
 	storages: StorageInfo[];
 	webdavEnabled: boolean;
@@ -807,6 +808,8 @@ export function AdminPanel({
 	onShowStats: (storage: StorageInfo) => void;
 	onEditStorage: (storage: StorageInfo) => void;
 	onAddStorage: () => void;
+	/** 守盘助手形象已切换 → 页面当场换人（不必手动刷新） */
+	onPetModelChanged?: () => void;
 }) {
 	const [tab, setTab] = useState<AdminTab>("storages");
 	const [shares, setShares] = useState<ShareInfo[]>([]);
@@ -836,6 +839,12 @@ export function AdminPanel({
 	const [petTesting, setPetTesting] = useState(false);
 	const [petMessage, setPetMessage] = useState<string | null>(null);
 	const [petModelMessage, setPetModelMessage] = useState<string | null>(null);
+	/** 上游体检结果：从本站服务器把各协议各打一遍的逐条状态 */
+	const [petDiag, setPetDiag] = useState<{
+		baseUrl: string;
+		model: string;
+		checks: Array<{ name: string; status: number; ms: number; text: string }>;
+	} | null>(null);
 
 	// 拉取分享 / 审计 / 用户 / 小猫配置 + 目录树
 	useEffect(() => {
@@ -904,7 +913,9 @@ export function AdminPanel({
 				body: JSON.stringify({ petModel: key }),
 			});
 			if (!response.ok) throw new Error("切换失败");
-			setPetModelMessage(`已切换形象，刷新页面即可看到新的守盘助手 ✨`);
+			setPetModelMessage("已切换，守盘助手马上换装 ✨");
+			// 通知页面重新读取形象并当场加载新的（不用手动刷新）
+			onPetModelChanged?.();
 		} catch (err) {
 			setPetModelMessage(err instanceof Error ? err.message : "切换失败");
 		}
@@ -974,9 +985,47 @@ export function AdminPanel({
 				throw new Error(data.error || "获取失败");
 			}
 			setPetModelList(data.models);
-			setPetMessage(`点下面的模型名即可切换（共 ${data.models.length} 个可用）`);
+			if (!petForm.model && data.models?.[0]) {
+				setPetForm((p) => ({ ...p, model: data.models![0] }));
+			}
+			setPetMessage(`共 ${data.models.length} 个可用，点模型名即可切换`);
 		} catch (err) {
 			setPetMessage(err instanceof Error ? err.message : "获取失败");
+		} finally {
+			setPetTesting(false);
+		}
+	};
+
+	// 上游体检：让本站服务器把「模型清单 / Chat / Responses / Messages」各打一遍，
+	// 逐条报状态码——到底哪条路通、哪条路被上游拒，一眼看清
+	const handleDiag = async () => {
+		setPetTesting(true);
+		setPetMessage(null);
+		setPetDiag(null);
+		try {
+			const response = await fetch("/api/pet?diag=1");
+			const data = (await response.json().catch(() => ({}))) as {
+				baseUrl?: string;
+				model?: string;
+				checks?: Array<{ name: string; status: number; ms: number; text: string }>;
+				error?: string;
+			};
+			if (!response.ok || !data.checks) {
+				throw new Error(data.error || "体检失败");
+			}
+			setPetDiag({
+				baseUrl: data.baseUrl || "",
+				model: data.model || "",
+				checks: data.checks,
+			});
+			const ok = data.checks.filter((c) => c.status === 200).length;
+			setPetMessage(
+				ok > 0
+					? `✓ 体检完成：${ok} 条路可通`
+					: "✗ 体检完成：四条路全不通（看下方逐条结果）"
+			);
+		} catch (err) {
+			setPetMessage(err instanceof Error ? err.message : "体检失败");
 		} finally {
 			setPetTesting(false);
 		}
@@ -1721,7 +1770,7 @@ export function AdminPanel({
 									</div>
 									<div>
 										<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-											模型名
+											模型名（可不填：保存时自动用清单里第一个）
 										</label>
 										<input
 											className="input"
@@ -1785,6 +1834,43 @@ export function AdminPanel({
 											{petMessage}
 										</p>
 									)}
+									{petDiag && (
+										<div className="rounded-lg border border-zinc-200 p-2.5 text-[11px] dark:border-zinc-700">
+											<p className="mb-1.5 font-medium text-zinc-600 dark:text-zinc-300">
+												从本站服务器出发，逐条路实测：
+											</p>
+											<ul className="space-y-1">
+													{petDiag.checks.map((c) => (
+														<li key={c.name} className="flex flex-wrap items-baseline gap-x-2">
+															<span
+																	className={
+																			c.status === 200
+																					? "font-semibold text-emerald-600 dark:text-emerald-400"
+																						: c.status === 401 || c.status === 400
+																							? "font-semibold text-amber-600 dark:text-amber-400"
+																							: "font-semibold text-red-600 dark:text-red-400"
+																		}
+															>
+																	{c.name}
+																</span>
+																<span className="text-zinc-500 dark:text-zinc-400">
+																	{c.status === 0 ? "连不上" : `HTTP ${c.status}`} · {c.ms}ms
+																	</span>
+																{c.text && (
+																	<span className="w-full break-all text-zinc-400 dark:text-zinc-500">
+																		{c.text.slice(0, 110)}
+																	</span>
+															)}
+														</li>
+													))}
+											</ul>
+											<p className="mt-1.5 text-[10.5px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+												绿 = 通；黄 = 路是通的、只是测试用的假请求被拒（真实聊天可用）；
+											红 = 这条路不通。四条全红且是 520/403：该接口不接受网站服务器调用，
+											只允许 Codex / Claude Code 这类客户端从电脑直连——换一个标准 OpenAI 兼容接口即可。
+										</p>
+									</div>
+									)}
 									<div className="flex gap-2">
 										<button type="submit" className="btn-primary flex-1" disabled={petSaving}>
 											{petSaving && <SpinnerIcon className="h-4 w-4 animate-spin" />}
@@ -1792,6 +1878,15 @@ export function AdminPanel({
 										</button>
 										{petConfigured && (
 											<>
+												<button
+													type="button"
+													className="btn-outline flex-1"
+													disabled={petTesting}
+													onClick={handleDiag}
+												>
+													{petTesting && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+													上游体检
+												</button>
 												<button
 													type="button"
 													className="btn-outline flex-1"

@@ -52,7 +52,7 @@ export async function readPetAiConfig(db: D1Database): Promise<PetAiConfig | nul
 	if (!raw) return null;
 	try {
 		const parsed = JSON.parse(raw) as PetAiConfig;
-		if (parsed.baseUrl && parsed.model && parsed.apiKey) return parsed;
+		if (parsed.baseUrl && parsed.apiKey) return parsed;
 	} catch {
 		/* 损坏按未配置处理 */
 	}
