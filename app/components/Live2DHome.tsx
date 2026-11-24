@@ -156,6 +156,7 @@ export default function Live2DHome({
 	// 设置视图（切站内模型 / 接入自己的模型）
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [siteModels, setSiteModels] = useState<string[]>([]);
+	const [siteModelsError, setSiteModelsError] = useState<string | null>(null);
 	const [ownForm, setOwnForm] = useState({ baseUrl: "", apiKey: "", model: "" });
 	const [ownModels, setOwnModels] = useState<string[]>([]);
 	const [settingsBusy, setSettingsBusy] = useState(false);
@@ -855,15 +856,25 @@ export default function Live2DHome({
 								onClick={() => {
 									const next = !settingsOpen;
 									setSettingsOpen(next);
-									if (next && myMode === "site" && siteModels.length === 0) {
-										// 打开时顺手拉一次站内模型清单
+									// 打开时顺手拉一次站内模型清单（与当前用哪种模式无关）；
+									// 失败把原因亮出来，不再永远「加载中」
+									if (next && aiConfigured && siteModels.length === 0 && !siteModelsError) {
+										setSiteModelsError(null);
 										void fetch("/api/pet?models=1")
-											.then((r) => (r.ok ? r.json() : null))
-											.then((d) => {
-												const dd = d as { models?: string[] } | null;
-												if (dd?.models) setSiteModels(dd.models);
+											.then(async (r) => {
+												const d = (await r.json().catch(() => null)) as {
+													models?: string[];
+													error?: string;
+												} | null;
+												if (!r.ok || !d?.models)
+													throw new Error(d?.error || "拉取失败");
+												setSiteModels(d.models);
 											})
-											.catch(() => {});
+											.catch((e) =>
+												setSiteModelsError(
+													e instanceof Error ? e.message : "拉取失败"
+												)
+											);
 									}
 								}}
 							>
@@ -919,6 +930,13 @@ export default function Live2DHome({
 											{!aiConfigured ? (
 												<p className="text-zinc-400">
 													站内未配置——在下面接入自己的模型就能聊
+												</p>
+											) : siteModelsError ? (
+												<p className="leading-relaxed text-red-600 dark:text-red-400">
+													{siteModelsError}。
+													<span className="text-zinc-500 dark:text-zinc-400">
+														可直接在下面「接入自己的模型」——浏览器直连你的接口，不受此限制
+													</span>
 												</p>
 											) : siteModels.length === 0 ? (
 												<p className="text-zinc-400">加载中…（再点一次 ⚙ 刷新）</p>
