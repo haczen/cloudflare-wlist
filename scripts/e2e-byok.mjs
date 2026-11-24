@@ -107,13 +107,35 @@ try {
 	await sleep(800);
 	const urlInput = await page.$('input[placeholder="https://api.deepseek.com/v1"]');
 	await urlInput.type("http://127.0.0.1:8787"); // 不带 /v1：验证自动补
-	await page.type('input[placeholder="sk-…"]', "sk-mock-123");
+	await page.type('input[type="password"]', "ah-arbitrary-prefix-9876"); // 非 sk- 前缀必须放行
 	await clickByText(page, "测试并获取模型");
 	check("「测试并获取模型」发出", await waitForText(page, "✓ 连通", 20000), "等成功标记");
 
 	const settingsText = await page.evaluate(() => document.body.innerText);
 	check("模型清单拉到 3 个", /共 3 个模型/.test(settingsText));
 	check("自动选中第一个 mock-mini", /mock-mini/.test(settingsText));
+
+	// ---- 4b. 反向：垃圾 key（终端装饰线）必须被前端拦下，不发请求 ----
+	{
+		await page.evaluate(() => {
+			const i = document.querySelector('input[type="password"]');
+			const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+			set.call(i, "──────────────────────────────── ❯");
+			i.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await clickByText(page, "测试并获取模型");
+		const blocked = await waitForText(page, "✗", 5000);
+		const txt = await page.evaluate(() => document.body.innerText);
+		check("垃圾 key 被拦下", blocked && /终端界面|记事本/.test(txt));
+		// 还原成真 key，继续后面的流程
+		await page.evaluate(() => {
+			const i = document.querySelector('input[type="password"]');
+			const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+			set.call(i, "ah-arbitrary-prefix-9876");
+			i.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await sleep(300);
+	}
 
 	// ---- 5. 保存 ----
 	await clickByText(page, "保存并启用");

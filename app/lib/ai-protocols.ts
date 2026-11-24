@@ -188,14 +188,17 @@ export const DEFAULT_PET_SYSTEM_PROMPT =
 
 /**
  * API Key 形状检查（服务端保存与浏览器直连共用）。
+ * 只看「是不是一串干净的字符」，不认前缀——各家 key 长相天差地别：
+ *   sk-…（OpenAI 系）｜ah-…｜key-…｜AKIA…（AWS）｜AIza…（Google）｜裸 uuid/token，
+ * 自建中转更是随便起，所以绝不能按开头去猜。
  * 真实事故：用户粘贴 key 时剪贴板里是终端装饰线（"────…… ❯"，223 个字符），
- * 存进库后所有上游调用全部异常。key 只可能是可打印 ASCII、不含空白——
- * 不满足直接拦下并告诉用户怎么重新复制。
+ * 存进库后所有上游调用全部异常。因此只拦「不可能是 key」的形状：
+ * 含非 ASCII / 控制符 / 空白、过短。
  */
 export function invalidApiKeyReason(key: string): string | null {
 	if (key.length === 0) return null; // 「必填」由调用方自己判
 	if (/[\u0000-\u001f\u007f-\uffff]/.test(key) || /\s/.test(key)) {
-		return "这个 Key 里有中文符号、横线装饰（───）、❯ 或空白——多半是复制时把终端界面一起带上了。先粘到记事本看一眼，确认是一串纯英文数字（通常 sk- 等开头），再整段复制过来";
+		return "这个 Key 里有中文符号、横线装饰（───）、❯ 或空白——多半是复制时把终端界面一起带上了。先粘到记事本看一眼，确认是一整串不带空格的字符，再整段复制过来";
 	}
 	if (key.length < 8) {
 		return "这个 Key 太短了，不像真的 API Key——请重新复制一遍";

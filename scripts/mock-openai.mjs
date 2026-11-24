@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 
 const PORT = Number(process.argv[2] || 8787);
-const KEY = "sk-mock-123";
+const KEY = "ah-arbitrary-prefix-9876"; // 故意不用 sk- 前缀：验证不按前缀做判断
 const MODELS = ["mock-mini", "mock-pro", "mock-ultra"];
 
 const cors = {

@@ -1032,13 +1032,14 @@ export default function Live2DHome({
 												</label>
 												<label className="block">
 													<span className="mb-0.5 block text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400">
-														API Key（sk- 开头；已接入过可留空沿用）
+														API Key（任意前缀都行：sk-…、ah-…、裸 token…；已接入过可留空沿用）
 													</span>
 													<input
 														className="input !py-1 !text-[11.5px]"
 														type="password"
-														placeholder="sk-…"
+														placeholder="粘贴你的 Key（sk-… / ah-… / 其他都行）"
 														autoComplete="off"
+														spellCheck={false}
 														value={ownForm.apiKey}
 														onChange={(e) => setOwnForm((f) => ({ ...f, apiKey: e.target.value }))}
 													/>
