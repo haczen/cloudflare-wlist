@@ -2844,10 +2844,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 							storageLabel={
 								node.mode === "pool"
 									? node.poolMembers.length > 0
-										? `聚合盘 · 轮询 ${node.poolMembers.length} 个桶`
-										: "聚合盘 · 全部桶平均分配"
-									: storages.find((s) => s.id === node.storageId)
-											?.name || `存储 #${node.storageId}`
+										? `分开 · ${node.poolMembers
+												.map((sid) => storages.find((s) => s.id === sid)?.name || `#${sid}`)
+												.join(" + ") || "聚合盘"}`
+										: "分开 · 全部桶平均分配"
+									: `单独 · ${storages.find((s) => s.id === node.storageId)?.name || `存储 #${node.storageId}`}`
 							}
 							onEdit={(n) =>
 								setEditingFolder({
@@ -2857,6 +2858,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 									guestUpload: n.guestUpload,
 									mode: n.mode,
 									poolMembers: n.poolMembers,
+									storageId: n.storageId,
+									storagePath: n.storagePath,
 								})
 							}
 							onChanged={refreshStorages}
@@ -3206,6 +3209,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 				<StatsDialog
 					storageId={statsStorage.id}
 					storageName={statsStorage.name}
+					quotaBytes={
+						typeof statsStorage.config?.quotaBytes === "number"
+							? statsStorage.config.quotaBytes
+							: undefined
+					}
 					onClose={() => setStatsStorage(null)}
 				/>
 			)}

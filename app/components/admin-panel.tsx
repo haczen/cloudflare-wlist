@@ -115,6 +115,12 @@ export function StorageFormDialog({
 			? JSON.stringify(initial.config, null, 2)
 			: "",
 		forcePathStyle: initial?.config?.forcePathStyle === true,
+		// 桶配额（GB）：存 config.quotaBytes，0/空 = 不限。用于统计弹窗算「剩余空间」
+		quotaGb:
+			initial?.config && typeof initial.config.quotaBytes === "number" &&
+			initial.config.quotaBytes > 0
+				? (initial.config.quotaBytes / 1024 / 1024 / 1024).toString()
+				: "",
 		isPublic: initial?.isPublic ?? false,
 		guestList: initial?.guestList ?? true,
 		guestDownload: initial?.guestDownload ?? true,
@@ -147,6 +153,13 @@ export function StorageFormDialog({
 				}
 			}
 
+			// 配额（GB）→ quotaBytes：S3/WebDAV 合并进 config；云盘合并进扩展 JSON
+			const quotaGbNum = parseFloat(form.quotaGb);
+			const quotaBytes =
+				form.quotaGb.trim() && !isNaN(quotaGbNum) && quotaGbNum > 0
+					? Math.round(quotaGbNum * 1024 * 1024 * 1024)
+					: 0;
+
 			const body: Record<string, any> = {
 				name: form.name,
 				type,
@@ -163,12 +176,31 @@ export function StorageFormDialog({
 						: "",
 				bucket: isS3 ? form.bucket : "",
 				basePath: form.basePath,
-				config: config || (isS3 ? { forcePathStyle: form.forcePathStyle } : {}),
+				config:
+					config ||
+					(isS3
+						? { forcePathStyle: form.forcePathStyle }
+						: isDrive
+							? {}
+							: undefined),
 				isPublic: form.isPublic,
 				guestList: form.guestList,
 				guestDownload: form.guestDownload,
 				guestUpload: form.guestUpload,
 			};
+			// 配额写入 config（云盘合并进已有扩展配置；S3/WebDAV 合并进连接配置）
+			if (quotaBytes > 0 || form.quotaGb.trim() === "") {
+				const mergedConfig = { ...(body.config || {}) };
+				if (quotaBytes > 0) {
+					mergedConfig.quotaBytes = quotaBytes;
+				} else if (isEdit) {
+					// 清空配额：显式置 0 覆盖旧值
+					mergedConfig.quotaBytes = 0;
+				}
+				if (Object.keys(mergedConfig).length > 0 || isEdit) {
+					body.config = mergedConfig;
+				}
+			}
 			// JSON.stringify 会丢弃 undefined 字段，服务端即跳过更新对应列
 
 			const response = await fetch("/api/storages", {
@@ -389,6 +421,25 @@ export function StorageFormDialog({
 						</div>
 					)}
 
+					{/* 桶配额：用于统计弹窗算「剩余空间」。S3/云盘协议无剩余容量接口，靠已用 vs 配额 */}
+					<div>
+						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+							容量配额（GB，可选）
+						</label>
+						<input
+							className="input"
+							type="number"
+							min="0"
+							step="0.1"
+							value={form.quotaGb}
+							onChange={(event) => set("quotaGb", event.target.value)}
+							placeholder="留空 = 不限"
+						/>
+						<p className="mt-1 text-[11px] text-zinc-500">
+							填了桶的总容量，统计弹窗会显示「已用 / 剩余」进度条；不填则只显示已用大小
+						</p>
+					</div>
+
 					{/* 权限 */}
 					<div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
 						<div className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
@@ -469,6 +520,16 @@ export interface AdminFolderNode {
 	id: number;
 	name: string;
 	isPublic?: boolean;
+	/** 桶 ID（单独存储） */
+	storageId?: number;
+	/** 桶内路径 */
+	storagePath?: string;
+	/** normal = 单独存储；pool = 分开存储（跨桶分片） */
+	mode?: "normal" | "pool";
+	/** 聚合盘成员桶 ID；空 = 全部 S3 桶 */
+	poolMembers?: number[];
+	/** 访客上传 */
+	guestUpload?: boolean;
 	children: AdminFolderNode[];
 }
 
@@ -543,6 +604,106 @@ function FolderAssignItem({
 					perms={perms}
 					toggleFolder={toggleFolder}
 					setPerm={setPerm}
+				/>
+			))}
+		</div>
+	);
+}
+
+/** 盘管理行：展示一个盘的存储方式与目标桶，递归子盘 */
+function FolderRow({
+	node,
+	depth,
+	storageNameById,
+	storages,
+	onShowStats,
+}: {
+	node: AdminFolderNode;
+	depth: number;
+	storageNameById: Map<number, string>;
+	storages: StorageInfo[];
+	onShowStats: (storage: StorageInfo) => void;
+}) {
+	const isPool = node.mode === "pool";
+	// 目标桶名（们）
+	const targetBuckets = isPool
+		? node.poolMembers && node.poolMembers.length > 0
+			? node.poolMembers
+					.map((sid) => storageNameById.get(sid) || `#${sid}`)
+					.join(" + ")
+			: "全部桶平均分配"
+		: storageNameById.get(node.storageId || -1) || `存储 #${node.storageId}`;
+	// 统计入口：单独盘 → 主桶；聚合盘 → 第一个成员桶（或第一个 S3 桶）
+	const statsStorageId = isPool
+		? (node.poolMembers && node.poolMembers.length > 0
+				? node.poolMembers[0]
+				: storages.find((s) => s.type === "s3")?.id)
+		: node.storageId;
+	const statsStorage = statsStorageId
+		? storages.find((s) => s.id === statsStorageId)
+		: undefined;
+
+	return (
+		<div>
+			<div
+				className="card flex flex-wrap items-center gap-3 px-3 py-2"
+				style={{ marginLeft: `${depth * 12}px` }}
+			>
+				<span className="text-sm" aria-hidden>
+					{node.children.length > 0 ? "📂" : "📄"}
+				</span>
+				<div className="min-w-0 flex-1">
+					<div className="flex flex-wrap items-center gap-1.5">
+						<span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+							{node.name}
+						</span>
+						<span
+							className={`badge ${
+								isPool
+									? "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-400"
+									: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+							}`}
+						>
+							{isPool ? "分开" : "单独"}
+						</span>
+						{node.isPublic && (
+							<span className="badge bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400">
+								公开
+							</span>
+						)}
+						{node.guestUpload && (
+							<span className="badge bg-accent-100 text-accent-700 dark:bg-accent-950 dark:text-accent-400">
+								访客可传
+							</span>
+						)}
+					</div>
+					<div className="mt-0.5 truncate text-xs text-zinc-500">
+						{isPool && <span aria-hidden>📦 </span>}
+						{targetBuckets}
+						{node.storagePath ? ` · /${node.storagePath}` : ""}
+					</div>
+				</div>
+				<div className="flex shrink-0 items-center gap-1">
+					{statsStorage && (
+						<button
+							type="button"
+							className="btn-ghost !px-2"
+							title={`统计「${statsStorage.name}」桶`}
+							onClick={() => onShowStats(statsStorage)}
+						>
+							<StatsIcon className="h-4 w-4" />
+						</button>
+					)}
+				</div>
+			</div>
+			{node.children.map((child) => (
+				<FolderRow
+					key={child.id}
+					node={child}
+					depth={depth + 1}
+					storageNameById={storageNameById}
+					storages={storages}
+					onShowStats={onShowStats}
 				/>
 			))}
 		</div>
@@ -786,7 +947,7 @@ export function UserFormDialog({
 
 // ---------- 管理面板主组件 ----------
 
-type AdminTab = "storages" | "users" | "shares" | "backup" | "audit" | "webdav" | "pet";
+type AdminTab = "storages" | "folders" | "users" | "shares" | "backup" | "audit" | "webdav" | "pet";
 
 export function AdminPanel({
 	storages,
@@ -848,15 +1009,17 @@ export function AdminPanel({
 
 	// 拉取分享 / 审计 / 用户 / 小猫配置 + 目录树
 	useEffect(() => {
+		if (tab === "users" || tab === "folders") {
+			fetch("/api/folders")
+				.then((response) => response.json() as Promise<{ folders?: AdminFolderNode[] }>)
+				.then((data) => setFolderTree(data.folders || []))
+				.catch(() => setFolderTree([]));
+		}
 		if (tab === "users") {
 			fetch("/api/users")
 				.then((response) => response.json() as Promise<{ users?: AdminUserRow[] }>)
 				.then((data) => setUsers(data.users || []))
 				.catch(() => setUsers([]));
-			fetch("/api/folders")
-				.then((response) => response.json() as Promise<{ folders?: AdminFolderNode[] }>)
-				.then((data) => setFolderTree(data.folders || []))
-				.catch(() => setFolderTree([]));
 		}
 		if (tab === "shares") {
 			fetch("/api/shares")
@@ -1211,6 +1374,7 @@ export function AdminPanel({
 
 	const tabs: Array<{ key: AdminTab; label: string }> = [
 		{ key: "storages", label: `存储 (${storages.length})` },
+		{ key: "folders", label: "盘" },
 		{ key: "users", label: "用户" },
 		{ key: "shares", label: "分享" },
 		{ key: "backup", label: "备份" },
@@ -1332,6 +1496,30 @@ export function AdminPanel({
 										</button>
 									</div>
 								</div>
+							))}
+						</div>
+					)}
+
+					{/* 盘管理：每个盘是单独存储还是分开存储、存到哪个桶 */}
+					{tab === "folders" && (
+						<div className="space-y-2">
+							<p className="px-1 text-xs text-zinc-500">
+								每个盘的存储方式与目标桶。「单独」= 整个盘挂在一个桶；「分开」= 大文件切片分布到多个桶。
+							</p>
+							{folderTree.length === 0 && (
+								<p className="py-10 text-center text-sm text-zinc-500">
+									还没有盘。在侧边栏点 📁 新建目录时选择存储模式
+								</p>
+							)}
+							{folderTree.map((node) => (
+								<FolderRow
+									key={node.id}
+									node={node}
+									depth={0}
+									storageNameById={storageNameById}
+									storages={storages}
+									onShowStats={onShowStats}
+								/>
 							))}
 						</div>
 					)}

@@ -745,6 +745,15 @@ export interface StorageStats {
 	fileCount: number;
 	folderCount: number;
 	typeDistribution: Record<string, { count: number; size: number }>;
+	/** 按盘分组：该桶上每个盘各占多少 */
+	byFolder?: Array<{
+		folderId: number;
+		name: string;
+		storagePath: string;
+		mode: "normal" | "pool";
+		size: number;
+		fileCount: number;
+	}>;
 }
 
 function formatSize(bytes: number): string {
@@ -761,10 +770,13 @@ function formatSize(bytes: number): string {
 export function StatsDialog({
 	storageId,
 	storageName,
+	quotaBytes,
 	onClose,
 }: {
 	storageId: number;
 	storageName: string;
+	/** 桶配额（字节），0/undefined = 不限 */
+	quotaBytes?: number;
 	onClose: () => void;
 }) {
 	const [stats, setStats] = useState<StorageStats | null>(null);
@@ -840,6 +852,87 @@ export function StatsDialog({
 							<div className="text-xs text-zinc-500">文件夹数</div>
 						</div>
 					</div>
+
+					{/* 配额进度条：已用 vs 配额 → 剩余。协议无桶剩余容量接口，靠手填配额算 */}
+					{quotaBytes && quotaBytes > 0 && (() => {
+						const used = stats.totalSize;
+						const total = quotaBytes;
+						const remaining = Math.max(total - used, 0);
+						const pct = Math.min((used / total) * 100, 100);
+						const over = used > total;
+						return (
+							<div className="card p-3">
+								<div className="mb-2 flex items-center justify-between text-xs">
+									<span className="font-semibold text-zinc-700 dark:text-zinc-300">
+										容量使用
+									</span>
+									<span
+										className={
+											over
+												? "font-medium text-red-600 dark:text-red-400"
+												: "text-zinc-500"
+										}
+									>
+										{formatSize(used)} / {formatSize(total)}
+										{over
+											? ` · 超额 ${formatSize(used - total)}`
+											: ` · 剩余 ${formatSize(remaining)}`}
+									</span>
+								</div>
+								<div className="h-2.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+									<div
+										className={`h-full rounded-full transition-all ${
+											over
+												? "bg-red-500"
+												: pct > 90
+													? "bg-amber-500"
+													: "bg-accent-500"
+										}`}
+										style={{ width: `${pct}%` }}
+									/>
+								</div>
+							</div>
+						);
+					})()}
+
+					{/* 按盘分组：该桶上每个盘各占多少。聚合盘只统计落在此桶的分片 */}
+					{stats.byFolder && stats.byFolder.length > 0 && (
+						<div>
+							<h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+								按盘分组（{stats.byFolder.length}）
+							</h4>
+							<div className="space-y-1.5">
+								{stats.byFolder
+									.slice()
+									.sort((a, b) => b.size - a.size)
+									.map((fs) => {
+										const pct = stats.totalSize
+											? Math.max((fs.size / stats.totalSize) * 100, 1)
+											: 0;
+										return (
+											<div key={fs.folderId} className="flex items-center gap-2 text-xs">
+												<span className="w-28 shrink-0 truncate text-zinc-600 dark:text-zinc-400" title={fs.name}>
+													{fs.mode === "pool" ? "📦 " : ""}
+													{fs.name}
+												</span>
+												<div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+													<div
+														className="h-full rounded-full bg-accent-500"
+														style={{ width: `${pct}%` }}
+													/>
+												</div>
+												<span className="w-16 shrink-0 text-right text-zinc-500">
+													{formatSize(fs.size)}
+												</span>
+												<span className="w-14 shrink-0 text-right text-zinc-500">
+													{fs.fileCount} 个
+												</span>
+											</div>
+										);
+									})}
+							</div>
+						</div>
+					)}
 					{topTypes.length > 0 && (
 						<div>
 							<h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -1415,6 +1508,10 @@ export interface EditableFolder {
 	guestUpload: boolean;
 	mode: "normal" | "pool";
 	poolMembers: number[];
+	/** 普通盘：挂在这个桶上 */
+	storageId?: number;
+	/** 桶内路径 */
+	storagePath?: string;
 }
 
 export function EditFolderDialog({
@@ -1544,29 +1641,37 @@ export function EditFolderDialog({
 				{folder.mode === "pool" ? (
 					<div>
 						<label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-							📦 聚合盘成员桶（全不选 = 全部桶平分）
+							📦 分开存储 · 成员桶（大文件切片分布到这些桶；全不选 = 全部桶平分）
 						</label>
 						<div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
-							{storageOptions.map((option) => (
-								<label
-									key={option.id}
-									className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300"
-								>
-									<input
-										type="checkbox"
-										className="h-4 w-4 accent-indigo-600"
-										checked={poolMembers.includes(option.id)}
-										onChange={(event) =>
-											setPoolMembers((prev) =>
-												event.target.checked
-													? [...prev, option.id]
-													: prev.filter((id) => id !== option.id)
-											)
-										}
-									/>
-									{option.name}
-								</label>
-							))}
+							{storageOptions.map((option) => {
+								const checked = poolMembers.includes(option.id);
+								return (
+									<label
+										key={option.id}
+										className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300"
+									>
+										<input
+											type="checkbox"
+											className="h-4 w-4 accent-indigo-600"
+											checked={checked}
+											onChange={(event) =>
+												setPoolMembers((prev) =>
+													event.target.checked
+														? [...prev, option.id]
+														: prev.filter((id) => id !== option.id)
+												)
+											}
+										/>
+										{option.name}
+										{checked && (
+											<span className="badge bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400">
+												分片到此
+											</span>
+										)}
+									</label>
+								);
+							})}
 						</div>
 						<p className="mt-1 text-[11px] text-zinc-400">
 							已选 {poolMembers.length} / {storageOptions.length}
@@ -1574,9 +1679,22 @@ export function EditFolderDialog({
 						</p>
 					</div>
 				) : (
-					<p className="rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-500 dark:bg-zinc-800/60 dark:text-zinc-400">
-						🗂️ 普通目录（单桶存储）。类型创建后不可更改。
-					</p>
+					<div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/60">
+						<div className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+							<span className="badge bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400">
+								单独存储
+							</span>
+							整个盘挂在一个桶上，类型创建后不可更改
+						</div>
+						<div className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+							存到桶：
+							<span className="font-medium text-zinc-700 dark:text-zinc-200">
+								{storageOptions.find((s) => s.id === folder.storageId)?.name ||
+									`存储 #${folder.storageId ?? "?"}`}
+							</span>
+							{folder.storagePath ? ` · 桶内路径 /${folder.storagePath}` : " · 桶根"}
+						</div>
+					</div>
 				)}
 
 				{error && (

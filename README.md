@@ -29,7 +29,7 @@
 ## 目录
 
 - [特色亮点](#特色亮点) · [特性](#特性)
-- [快速部署（约 5 分钟）](#快速部署约-5-分钟) · [持续部署](#持续部署可选) · [可选集成](#github-登录可选)（GitHub 登录 / Telegram / S3 配置）
+- [快速部署（约 5 分钟）](#快速部署约-5-分钟) · [持续部署](#持续部署可选) · [移动端客户端](#移动端客户端) · [可选集成](#github-登录可选)（GitHub 登录 / Telegram / S3 配置）
 - [守盘助手（AI 看板娘）](#守盘助手ai-看板娘)
 - [使用模型](#使用模型) · [常见问题](#常见问题-faq) · [技术栈](#技术栈)
 - [更新日志](#更新日志) · [Star History](#star-history)
@@ -56,6 +56,8 @@
 **虚拟目录树**（桶对用户完全隐形）
 - 管理员侧边栏「目录」旁的 ＋ 按钮直接新建顶层目录，也可在任意目录下建子目录
 - 支持「普通盘」（整个目录落在一个桶）与「聚合盘」（见下）两种模式，可随时互转
+- **每个盘存到哪些桶一目了然**：管理面板「盘」tab 列出全部盘的存储方式与目标桶；侧边栏盘名下标注 `单独 · 桶名` / `分开 · 桶A + 桶B`；**编辑盘时也能看到**——普通盘显示「存到桶：xxx · 桶内路径 /xxx」，聚合盘成员桶逐个列出并标记「分片到此」
+- **桶容量配额**：每个桶可填容量配额，统计弹窗显示「已用 / 剩余」进度条（>90% 琥珀色、超额标红），并按盘分组列出各盘在该桶的占用大小
 - 目录可标记「公开」，访客无需登录即可浏览
 - 用户分配到的是**目录**而非桶，浏览 / 下载 / 上传三项权限独立控制
 
@@ -119,6 +121,20 @@ npm run deploy
 fork 后在仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `ADMIN_PASSWORD`，变量 `DATABASE_ID`，push 到 main 即自动部署（`.github/workflows/deploy.yml`）。`wrangler.jsonc` 已 gitignore，CI 从 example 模板生成。
 
 **CI / Release**：所有分支 push / PR 自动跑 typecheck + build（`ci.yml`）；打 `v*` 标签（如 `git tag v1.3.0 && git push --tags`）自动构建并发布 GitHub Release，附自动生成的完整变更说明（`release.yml`）。
+
+### 移动端客户端
+
+配套的 **[Wlist-app](https://github.com/haczen/Wlist-app)** 是独立的 Android 原生应用（Java · 全代码布局 · 零云端依赖），把手机里的文件直接上传到你的 WList 网盘。会话 Cookie 用 Android Keystore 加密保存，App 不存储账号密码，账号密码登录仅接受 HTTPS。
+
+**功能**：多来源上传（本机 / 相册 / 拍照录像 / 直链 / 微信 QQ 浏览器分享，多选批量 + 前台服务后台续传）、目录浏览与图片/文本/PDF/视频/音频在线预览、聚合盘浏览（分片分布一目了然）、守盘助手（Live2D 形象 · 自动朗读 · 知道日期与当地天气）、Vosk 离线中文语音输入、ZipVoice 零样本音色克隆朗读。
+
+**安装与构建**：
+
+- 安装：从 [Releases](https://github.com/haczen/Wlist-app/releases) 下载 APK 传到手机安装（最低 Android 7.0 / API 24）
+- 构建：`./gradlew :app:assembleDebug`（或仓库根目录的 `build-apk.ps1`），产物在 `app/build/outputs/apk/debug/app-debug.apk`
+- 可选模型（语音识别 / 音色合成，不打进 APK 以控制体积）：用 `adb push` 推到应用私有目录，详见 app 仓库 README
+
+**连接 WList 站点**：打开 App 填写你的 WList 部署地址（如 `https://wlist.example.com`）→ 登录有上传权限的账号，或选「仅连接公开目录」→ 选上传目录、添加文件、点上传。App 调用的就是 WList 网站同一套登录会话、目录权限、上传 / 浏览 API。
 
 ### GitHub 登录(可选)
 
